@@ -642,8 +642,10 @@ struct WeekChartView: View {
             }
             
             HStack(spacing: 8) {
-                ForEach(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], id: \.self) { day in
-                    Text(day)
+                ForEach(0..<7) { index in
+                    let date = Calendar.current.date(byAdding: .day, value: index - 6, to: Date()) ?? Date()
+                    let dayName = date.formatted(.dateTime.weekday(.abbreviated))
+                    Text(dayName)
                         .font(.caption)
                         .foregroundColor(.gray)
                         .frame(maxWidth: .infinity)
