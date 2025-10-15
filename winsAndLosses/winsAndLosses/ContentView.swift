@@ -1,234 +1,914 @@
-//
-//  ContentView.swift
-//  winsAndLosses
-//
-//  Created by Trey Jennings on 10/5/25.
-//
-
 import SwiftUI
-internal import Combine
+import Combine
 
 // MARK: - Models
-
-enum EntryType: String, CaseIterable, Codable {
-    case w = "W", l = "L", ofg = "OFG"
-    var long: String {
-        switch self {
-        case .w:   return "Win"
-        case .l:   return "Loss"
-        case .ofg: return "Opportunity for Growth"
-        }
-    }
-    var title: String { rawValue }
-}
-
-struct Entry: Identifiable, Codable {
+struct JournalEntry: Identifiable, Codable {
     let id: UUID
     let type: EntryType
-    let text: String
+    let content: String
     let date: Date
+    
+    init(id: UUID = UUID(), type: EntryType, content: String, date: Date = Date()) {
+        self.id = id
+        self.type = type
+        self.content = content
+        self.date = date
+    }
 }
 
-// MARK: - Store (local persistence via UserDefaults)
-
-final class EntryStore: ObservableObject {
-    @Published var entries: [Entry] = [] { didSet { save() } }
-    private let key = "winsAndLosses.entries.v1"
-
-    init() { load() }
-
-    func add(_ type: EntryType, text: String) {
-        entries.insert(Entry(id: .init(), type: type, text: text, date: Date()), at: 0)
+enum EntryType: String, Codable, CaseIterable {
+    case win = "Wins"
+    case loss = "Losses"
+    case ofg = "OFGs"
+    
+    var icon: String {
+        switch self {
+        case .win: return "trophy.fill"
+        case .loss: return "cloud.rain.fill"
+        case .ofg: return "light.beacon.max.fill"
+        }
     }
+    
+    var color: Color {
+        switch self {
+        case .win: return .green
+        case .loss: return .orange
+        case .ofg: return .blue
+        }
+    }
+    
+    var subtitle: String {
+        switch self {
+        case .win: return "Things that went well"
+        case .loss: return "Things out of control"
+        case .ofg: return "Opportunities for growth"
+        }
+    }
+}
 
-    private func load() {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return }
-        if let decoded = try? JSONDecoder().decode([Entry].self, from: data) {
+// MARK: - ViewModel
+class JournalViewModel: ObservableObject {
+    @Published var entries: [JournalEntry] = []
+    
+    init() {
+        loadEntries()
+    }
+    
+    func addEntry(_ entry: JournalEntry) {
+        entries.append(entry)
+        saveEntries()
+    }
+    
+    func deleteEntry(_ entry: JournalEntry) {
+        entries.removeAll { $0.id == entry.id }
+        saveEntries()
+    }
+    
+    func entriesForType(_ type: EntryType) -> [JournalEntry] {
+        entries.filter { $0.type == type }
+    }
+    
+    func entriesThisWeek() -> [JournalEntry] {
+        let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        return entries.filter { $0.date >= weekAgo }
+    }
+    
+    func currentStreak() -> Int {
+        guard !entries.isEmpty else { return 0 }
+        
+        let calendar = Calendar.current
+        let sortedDates = entries.map { calendar.startOfDay(for: $0.date) }
+            .sorted(by: >)
+        
+        guard let mostRecent = sortedDates.first else { return 0 }
+        let today = calendar.startOfDay(for: Date())
+        
+        if mostRecent < calendar.date(byAdding: .day, value: -1, to: today)! {
+            return 0
+        }
+        
+        var streak = 0
+        var currentDate = today
+        
+        for date in sortedDates {
+            if calendar.isDate(date, inSameDayAs: currentDate) {
+                if !sortedDates.filter({ calendar.isDate($0, inSameDayAs: currentDate) }).isEmpty {
+                    if streak == 0 || calendar.isDate(date, inSameDayAs: currentDate) {
+                        streak += 1
+                        currentDate = calendar.date(byAdding: .day, value: -1, to: currentDate) ?? currentDate
+                    }
+                }
+            }
+        }
+        
+        return streak
+    }
+    
+    func entriesForDay(_ date: Date) -> [JournalEntry] {
+        let calendar = Calendar.current
+        return entries.filter { calendar.isDate($0.date, inSameDayAs: date) }
+    }
+    
+    private func saveEntries() {
+        if let encoded = try? JSONEncoder().encode(entries) {
+            UserDefaults.standard.set(encoded, forKey: "journalEntries")
+        }
+    }
+    
+    private func loadEntries() {
+        if let data = UserDefaults.standard.data(forKey: "journalEntries"),
+           let decoded = try? JSONDecoder().decode([JournalEntry].self, from: data) {
             entries = decoded
         }
     }
+}
 
-    private func save() {
-        if let data = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(data, forKey: key)
+// MARK: - Main App
+struct ContentView: View {
+    @StateObject private var viewModel = JournalViewModel()
+    @State private var selectedTab = 0
+    
+    var body: some View {
+        ZStack {
+            TabView(selection: $selectedTab) {
+                HomeView(viewModel: viewModel, selectedTab: $selectedTab)
+                    .tag(0)
+                
+                JournalView(viewModel: viewModel)
+                    .tag(1)
+                
+                AnalyticsView(viewModel: viewModel)
+                    .tag(2)
+                
+                ProfileView()
+                    .tag(3)
+            }
+            
+            VStack {
+                Spacer()
+                CustomTabBar(selectedTab: $selectedTab)
+            }
         }
     }
 }
 
-// MARK: - Root Tabs
-
-struct RootTabs: View {
+// MARK: - Home View
+struct HomeView: View {
+    @ObservedObject var viewModel: JournalViewModel
+    @Binding var selectedTab: Int
+    @State private var showingNewEntry = false
+    
     var body: some View {
-        TabView {
-            CaptureView()
-                .tabItem { Label("Count", systemImage: "plus.circle") }
-
-            LogView()
-                .tabItem { Label("Log", systemImage: "list.bullet") }
-        }
-    }
-}
-
-// MARK: - Tab 1: Capture
-
-struct CaptureView: View {
-    enum FocusField: Hashable { case input }
-    @EnvironmentObject private var store: EntryStore
-    @State private var selected: EntryType? = nil
-    @State private var text = ""
-    @State private var showAlert = false
-    @FocusState private var focus: FocusField?
-
-    var body: some View {
-        VStack {
-            Spacer()  // pushes content to center
-
-            VStack(spacing: 20) {
-                Text("Count your...")
-                    .font(.largeTitle).bold()
-
-                VStack(spacing: 12) {
-                    bigButton(.w)
-                    bigButton(.l)
-                    bigButton(.ofg)
-                }
-
-                if let selected {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Tell me about your \(selected.long).")
-                            .font(.headline)
-
-                        TextEditor(text: $text)
-                            .frame(minHeight: 120)
-                            .padding(8)
-                            .overlay(RoundedRectangle(cornerRadius: 10)
-                                .stroke(Color.secondary.opacity(0.4), lineWidth: 1))
-
-                        Button("Submit") {
-                            store.add(selected, text: text.trimmingCharacters(in: .whitespacesAndNewlines))
-                            showAlert = true
+        NavigationView {
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Hi there,")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                            Text("How are you feeling today?")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
                         }
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 8)
+                        
+                        VStack(spacing: 16) {
+                            ForEach(EntryType.allCases, id: \.self) { type in
+                                StatCard(
+                                    type: type,
+                                    count: viewModel.entriesThisWeek().filter { $0.type == type }.count,
+                                    action: {
+                                        showingNewEntry = true
+                                    }
+                                )
+                            }
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Your Journey")
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(viewModel.currentStreak()) day streak")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                            }
+                            
+                            WeekChartView(viewModel: viewModel)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Recent Entries")
+                                    .font(.headline)
+                                Spacer()
+                                Button("View all") {
+                                    selectedTab = 1
+                                }
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                            }
+                            
+                            if viewModel.entries.isEmpty {
+                                Text("No entries yet. Start journaling!")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                                    .padding(.vertical)
+                            } else {
+                                ForEach(viewModel.entries.sorted(by: { $0.date > $1.date }).prefix(3)) { entry in
+                                    EntryRow(entry: entry)
+                                }
+                            }
+                        }
+                        .padding(.bottom, 100)
                     }
-                    .transition(.opacity)
+                    .padding(.horizontal)
                 }
+                
+                Button(action: {
+                    showingNewEntry = true
+                }) {
+                    Image(systemName: "plus")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 56, height: 56)
+                        .background(Color.cyan)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+                }
+                .padding(.trailing, 20)
+                .padding(.bottom, 80)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {}) {
+                        Image(systemName: "person.circle")
+                            .foregroundColor(.primary)
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {}) {
+                        Image(systemName: "bell")
+                            .foregroundColor(.primary)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingNewEntry) {
+            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
+        }
+    }
+}
+
+// MARK: - New Entry View
+struct NewEntryView: View {
+    @ObservedObject var viewModel: JournalViewModel
+    @Binding var isPresented: Bool
+    @State private var selectedType: EntryType = .win
+    @State private var content: String = ""
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("What would you like to journal?")
+                        .font(.headline)
+                    
+                    HStack(spacing: 12) {
+                        ForEach(EntryType.allCases, id: \.self) { type in
+                            Button(action: {
+                                selectedType = type
+                            }) {
+                                VStack(spacing: 8) {
+                    Image(systemName: type.icon)
+                                        .font(.title2)
+                                        .foregroundColor(selectedType == type ? .white : type.color)
+                                    Text(type.rawValue)
+                                        .font(.caption)
+                                        .foregroundColor(selectedType == type ? .white : .primary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(selectedType == type ? type.color : Color(.systemGray6))
+                                .cornerRadius(12)
+                            }
+                        }
+                    }
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(selectedType.subtitle)
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                    
+                    TextEditor(text: $content)
+                        .frame(height: 200)
+                        .padding(8)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color(.systemGray4), lineWidth: 1)
+                        )
+                }
+                
+                Spacer()
+                
+                Button(action: {
+                    if !content.isEmpty {
+                        let entry = JournalEntry(type: selectedType, content: content)
+                        viewModel.addEntry(entry)
+                        isPresented = false
+                    }
+                }) {
+                    Text("Save Entry")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(content.isEmpty ? Color.gray : Color.cyan)
+                        .cornerRadius(12)
+                }
+                .disabled(content.isEmpty)
             }
             .padding()
-
-            Spacer()  // pushes content to center
-        }
-        .alert("Got you!", isPresented: $showAlert) {
-            Button("OK") {
-                selected = nil
-                text = ""
-            }
-        } message: {
-            if let s = selected {
-                Text("\(s.long) recorded.")
-            } else {
-                Text("Saved.")
+            .navigationTitle("New Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        isPresented = false
+                    }
+                }
             }
         }
-    }
-
-    private func bigButton(_ type: EntryType) -> some View {
-        Button {
-            withAnimation { selected = type }
-        } label: {
-            Text(type.title)
-                .font(.system(size: 40, weight: .bold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
     }
 }
 
-
-// MARK: - Tab 2: Log
-
-enum TimeFilter: String, CaseIterable {
-    case all = "All", week = "Week", month = "Month", threeMonths = "3 Months", sixMonths = "6 Months"
+// MARK: - Journal View
+struct JournalView: View {
+    @ObservedObject var viewModel: JournalViewModel
+    @State private var selectedFilter: EntryType?
+    @State private var showingNewEntry = false
+    
+    var filteredEntries: [JournalEntry] {
+        if let filter = selectedFilter {
+            return viewModel.entries.filter { $0.type == filter }
+        }
+        return viewModel.entries
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        FilterChip(title: "All", isSelected: selectedFilter == nil) {
+                            selectedFilter = nil
+                        }
+                        
+                        ForEach(EntryType.allCases, id: \.self) { type in
+                            FilterChip(
+                                title: type.rawValue,
+                                isSelected: selectedFilter == type,
+                                color: type.color
+                            ) {
+                                selectedFilter = type
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
+                }
+                .background(Color(.systemBackground))
+                
+                if filteredEntries.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "book.closed")
+                            .font(.system(size: 60))
+                            .foregroundColor(.gray)
+                        Text("No entries yet")
+                            .font(.headline)
+                        Text("Start journaling your wins, losses, and growth opportunities")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                        
+                        Button(action: {
+                            showingNewEntry = true
+                        }) {
+                            Text("Create Entry")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(Color.cyan)
+                                .cornerRadius(12)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else {
+                    List {
+                        ForEach(filteredEntries.sorted(by: { $0.date > $1.date })) { entry in
+                            JournalEntryCard(entry: entry)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        viewModel.deleteEntry(entry)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("Journal")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showingNewEntry = true
+                    }) {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.cyan)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingNewEntry) {
+            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
+        }
+    }
 }
 
-struct LogView: View {
-    @EnvironmentObject private var store: EntryStore
-    @State private var filter: TimeFilter = .all
-
-    private var filtered: [Entry] {
-        let now = Date()
-        let cal = Calendar.current
-        let start: Date? = {
-            switch filter {
-            case .all: return nil
-            case .week: return cal.date(byAdding: .day, value: -7, to: now)
-            case .month: return cal.date(byAdding: .month, value: -1, to: now)
-            case .threeMonths: return cal.date(byAdding: .month, value: -3, to: now)
-            case .sixMonths: return cal.date(byAdding: .month, value: -6, to: now)
+// MARK: - Analytics View
+struct AnalyticsView: View {
+    @ObservedObject var viewModel: JournalViewModel
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 24) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Overview")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        HStack(spacing: 16) {
+                            AnalyticCard(
+                                title: "Total Entries",
+                                value: "\(viewModel.entries.count)",
+                                icon: "doc.text.fill",
+                                color: .purple
+                            )
+                            
+                            AnalyticCard(
+                                title: "Current Streak",
+                                value: "\(viewModel.currentStreak())",
+                                icon: "flame.fill",
+                                color: .orange
+                            )
+                        }
+                        
+                        HStack(spacing: 16) {
+                            AnalyticCard(
+                                title: "This Week",
+                                value: "\(viewModel.entriesThisWeek().count)",
+                                icon: "calendar",
+                                color: .blue
+                            )
+                            
+                            AnalyticCard(
+                                title: "Best Day",
+                                value: bestDay(),
+                                icon: "star.fill",
+                                color: .yellow
+                            )
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Entry Breakdown")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        ForEach(EntryType.allCases, id: \.self) { type in
+                            EntryBreakdownRow(
+                                type: type,
+                                count: viewModel.entriesForType(type).count,
+                                total: viewModel.entries.count
+                            )
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Weekly Activity")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        WeeklyActivityChart(viewModel: viewModel)
+                    }
+                }
+                .padding()
             }
-        }()
-        return start.map { s in store.entries.filter { $0.date >= s } } ?? store.entries
+            .navigationTitle("Analytics")
+        }
     }
-
-    private var counts: (w: Int, l: Int, ofg: Int) {
-        (
-            filtered.filter { $0.type == .w }.count,
-            filtered.filter { $0.type == .l }.count,
-            filtered.filter { $0.type == .ofg }.count
-        )
+    
+    func bestDay() -> String {
+        let calendar = Calendar.current
+        var dayCounts: [Int: Int] = [:]
+        
+        for entry in viewModel.entries {
+            let weekday = calendar.component(.weekday, from: entry.date)
+            dayCounts[weekday, default: 0] += 1
+        }
+        
+        guard let maxDay = dayCounts.max(by: { $0.value < $1.value }) else {
+            return "N/A"
+        }
+        
+        let dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        return dayNames[maxDay.key - 1]
     }
+}
 
+// MARK: - Profile View
+struct ProfileView: View {
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    HStack {
+                        Image(systemName: "person.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.gray)
+                        VStack(alignment: .leading) {
+                            Text("User Name")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                            Text("user@example.com")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                        }
+                        .padding(.leading, 8)
+                    }
+                    .padding(.vertical, 8)
+                }
+                
+                Section("Preferences") {
+                    NavigationLink(destination: Text("Notifications")) {
+                        Label("Notifications", systemImage: "bell")
+                    }
+                    NavigationLink(destination: Text("Reminders")) {
+                        Label("Daily Reminders", systemImage: "clock")
+                    }
+                    NavigationLink(destination: Text("Appearance")) {
+                        Label("Appearance", systemImage: "paintbrush")
+                    }
+                }
+                
+                Section("Support") {
+                    NavigationLink(destination: Text("Help")) {
+                        Label("Help & Support", systemImage: "questionmark.circle")
+                    }
+                    NavigationLink(destination: Text("About")) {
+                        Label("About", systemImage: "info.circle")
+                    }
+                }
+            }
+            .navigationTitle("Profile")
+        }
+    }
+}
+
+// MARK: - Supporting Views
+struct StatCard: View {
+    let type: EntryType
+    let count: Int
+    let action: () -> Void
+    
+    var body: some View {
+        HStack {
+            Image(systemName: type.icon)
+                .font(.title2)
+                .foregroundColor(type.color)
+                .frame(width: 48, height: 48)
+                .background(type.color.opacity(0.15))
+                .clipShape(Circle())
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(type.rawValue)
+                    .font(.headline)
+                Text(type.subtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                Text("\(count) entries this week")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding(.top, 2)
+            }
+            
+            Spacer()
+            
+            Button(action: action) {
+                Image(systemName: "plus")
+                    .font(.title3)
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct WeekChartView: View {
+    @ObservedObject var viewModel: JournalViewModel
+    
     var body: some View {
         VStack(spacing: 12) {
-            // Top counts
-            HStack(spacing: 12) {
-                CountCard(label: "W", value: counts.w)
-                CountCard(label: "L", value: counts.l)
-                CountCard(label: "OFG", value: counts.ofg)
-            }
-
-            // Filter picker (expand later as needed)
-            Picker("Filter", selection: $filter) {
-                ForEach(TimeFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-
-            // List of entries (most recent first)
-            List(filtered) { entry in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(entry.type.rawValue)
-                            .font(.headline)
-                        Spacer()
-                        Text(entry.date, format: .dateTime.year().month().day().hour().minute())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(entry.text).font(.body)
+            HStack(spacing: 8) {
+                ForEach(0..<7) { index in
+                    let date = Calendar.current.date(byAdding: .day, value: index - 6, to: Date()) ?? Date()
+                    let entries = viewModel.entriesForDay(date)
+                    DayBar(entries: entries)
                 }
-                .padding(.vertical, 4)
+            }
+            
+            HStack(spacing: 8) {
+                ForEach(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], id: \.self) { day in
+                    Text(day)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
-        .padding()
     }
 }
 
-struct CountCard: View {
-    let label: String
-    let value: Int
+struct DayBar: View {
+    let entries: [JournalEntry]
+    
     var body: some View {
-        VStack {
-            Text(label).font(.headline)
-            Text("\(value)").font(.largeTitle).bold()
+        VStack(spacing: 2) {
+            ForEach(entries.prefix(3)) { entry in
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(entry.type.color)
+                    .frame(height: max(30, CGFloat(40)))
+            }
+            
+            if entries.isEmpty {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(.systemGray5))
+                    .frame(height: 30)
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding()
-        .overlay(RoundedRectangle(cornerRadius: 12)
-            .stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+        .frame(height: 100, alignment: .bottom)
     }
 }
 
-// Preview (Xcode 15+)
-#Preview { RootTabs().environmentObject(EntryStore()) }
+struct EntryRow: View {
+    let entry: JournalEntry
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: entry.type.icon)
+                .font(.body)
+                .foregroundColor(entry.type.color)
+                .frame(width: 32, height: 32)
+                .background(entry.type.color.opacity(0.15))
+                .clipShape(Circle())
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.content)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                Text(entry.date, style: .relative)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            
+            Spacer()
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+struct JournalEntryCard: View {
+    let entry: JournalEntry
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: entry.type.icon)
+                    .foregroundColor(entry.type.color)
+                Text(entry.type.rawValue)
+                    .font(.headline)
+                    .foregroundColor(entry.type.color)
+                Spacer()
+                Text(entry.date, style: .date)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            
+            Text(entry.content)
+                .font(.body)
+            
+            Text(entry.date, style: .time)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    var color: Color = .blue
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(isSelected ? .white : .primary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(isSelected ? color : Color(.systemGray6))
+                .cornerRadius(20)
+        }
+    }
+}
+
+struct AnalyticCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(color)
+            
+            Text(value)
+                .font(.title)
+                .fontWeight(.bold)
+            
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct EntryBreakdownRow: View {
+    let type: EntryType
+    let count: Int
+    let total: Int
+    
+    var percentage: Double {
+        guard total > 0 else { return 0 }
+        return Double(count) / Double(total)
+    }
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Image(systemName: type.icon)
+                    .foregroundColor(type.color)
+                Text(type.rawValue)
+                    .font(.subheadline)
+                Spacer()
+                Text("\(count)")
+                    .font(.headline)
+                Text("(\(Int(percentage * 100))%)")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(.systemGray5))
+                        .frame(height: 8)
+                    
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(type.color)
+                        .frame(width: geometry.size.width * percentage, height: 8)
+                }
+            }
+            .frame(height: 8)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct WeeklyActivityChart: View {
+    @ObservedObject var viewModel: JournalViewModel
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ForEach(0..<7) { index in
+                let date = Calendar.current.date(byAdding: .day, value: index - 6, to: Date()) ?? Date()
+                let entries = viewModel.entriesForDay(date)
+                
+                HStack {
+                    Text(date, format: .dateTime.weekday(.abbreviated))
+                        .font(.subheadline)
+                        .frame(width: 40, alignment: .leading)
+                    
+                    HStack(spacing: 4) {
+                        ForEach(entries.prefix(5)) { entry in
+                            Circle()
+                                .fill(entry.type.color)
+                                .frame(width: 24, height: 24)
+                        }
+                        
+                        if entries.isEmpty {
+                            Circle()
+                                .fill(Color(.systemGray5))
+                                .frame(width: 24, height: 24)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Text("\(entries.count)")
+                        .font(.headline)
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct CustomTabBar: View {
+    @Binding var selectedTab: Int
+    
+    var body: some View {
+        HStack {
+            TabBarItem(icon: "house.fill", label: "Home", isSelected: selectedTab == 0) {
+                selectedTab = 0
+            }
+            TabBarItem(icon: "book.fill", label: "Journal", isSelected: selectedTab == 1) {
+                selectedTab = 1
+            }
+            TabBarItem(icon: "chart.line.uptrend.xyaxis", label: "Insights", isSelected: selectedTab == 2) {
+                selectedTab = 2
+            }
+            TabBarItem(icon: "person.fill", label: "Profile", isSelected: selectedTab == 3) {
+                selectedTab = 3
+            }
+        }
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: -2)
+    }
+}
+
+struct TabBarItem: View {
+    let icon: String
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                Text(label)
+                    .font(.caption)
+            }
+            .foregroundColor(isSelected ? .cyan : .gray)
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}
