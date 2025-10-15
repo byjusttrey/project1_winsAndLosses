@@ -599,7 +599,7 @@ struct StatCard: View {
                 .font(.title2)
                 .foregroundColor(type.color)
                 .frame(width: 48, height: 48)
-                .background(type.color.opacity(0.15))
+                .background(.white.opacity(0.5))
                 .clipShape(Circle())
             
             VStack(alignment: .leading, spacing: 4) {
@@ -615,16 +615,15 @@ struct StatCard: View {
             }
             
             Spacer()
-            
-            Button(action: action) {
-                Image(systemName: "plus")
-                    .font(.title3)
-                    .foregroundColor(.gray)
-            }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(type.color.opacity(0.12))
         .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(type.color.opacity(0.4), lineWidth: 1.5)
+        )
+        .shadow(color: type.color.opacity(0.2), radius: 4, x: 0, y: 2)
     }
 }
 
