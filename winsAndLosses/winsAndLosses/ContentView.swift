@@ -658,16 +658,23 @@ struct DayBar: View {
     
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(entries.prefix(3)) { entry in
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(entry.type.color)
-                    .frame(height: max(30, CGFloat(40)))
-            }
-            
             if entries.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color(.systemGray5))
                     .frame(height: 30)
+            } else {
+                // Calculate height per entry to fit within 100pt max
+                let maxHeight: CGFloat = 100
+                let spacing: CGFloat = 2
+                let entryCount = min(entries.count, 5) // Max 5 entries shown
+                let totalSpacing = spacing * CGFloat(entryCount - 1)
+                let heightPerEntry = (maxHeight - totalSpacing) / CGFloat(entryCount)
+                
+                ForEach(entries.prefix(5)) { entry in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(entry.type.color)
+                        .frame(height: heightPerEntry)
+                }
             }
         }
         .frame(maxWidth: .infinity)
