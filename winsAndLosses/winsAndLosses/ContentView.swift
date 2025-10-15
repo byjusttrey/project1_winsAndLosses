@@ -238,7 +238,7 @@ struct HomeView: View {
                         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
                 }
                 .padding(.trailing, 20)
-                .padding(.bottom, 80)
+                .padding(.bottom, 20)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -599,7 +599,7 @@ struct StatCard: View {
                 .font(.title2)
                 .foregroundColor(type.color)
                 .frame(width: 48, height: 48)
-                .background(type.color.opacity(0.15))
+                .background(.white.opacity(0.5))
                 .clipShape(Circle())
             
             VStack(alignment: .leading, spacing: 4) {
@@ -615,16 +615,15 @@ struct StatCard: View {
             }
             
             Spacer()
-            
-            Button(action: action) {
-                Image(systemName: "plus")
-                    .font(.title3)
-                    .foregroundColor(.gray)
-            }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(type.color.opacity(0.12))
         .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(type.color.opacity(0.4), lineWidth: 1.5)
+        )
+        .shadow(color: type.color.opacity(0.2), radius: 4, x: 0, y: 2)
     }
 }
 
@@ -642,8 +641,10 @@ struct WeekChartView: View {
             }
             
             HStack(spacing: 8) {
-                ForEach(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], id: \.self) { day in
-                    Text(day)
+                ForEach(0..<7) { index in
+                    let date = Calendar.current.date(byAdding: .day, value: index - 6, to: Date()) ?? Date()
+                    let dayName = date.formatted(.dateTime.weekday(.abbreviated))
+                    Text(dayName)
                         .font(.caption)
                         .foregroundColor(.gray)
                         .frame(maxWidth: .infinity)
@@ -658,16 +659,23 @@ struct DayBar: View {
     
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(entries.prefix(3)) { entry in
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(entry.type.color)
-                    .frame(height: max(30, CGFloat(40)))
-            }
-            
             if entries.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color(.systemGray5))
                     .frame(height: 30)
+            } else {
+                // Calculate height per entry to fit within 100pt max
+                let maxHeight: CGFloat = 100
+                let spacing: CGFloat = 2
+                let entryCount = min(entries.count, 5) // Max 5 entries shown
+                let totalSpacing = spacing * CGFloat(entryCount - 1)
+                let heightPerEntry = (maxHeight - totalSpacing) / CGFloat(entryCount)
+                
+                ForEach(entries.prefix(5)) { entry in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(entry.type.color)
+                        .frame(height: heightPerEntry)
+                }
             }
         }
         .frame(maxWidth: .infinity)
