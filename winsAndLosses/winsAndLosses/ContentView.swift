@@ -238,7 +238,7 @@ struct HomeView: View {
                         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
                 }
                 .padding(.trailing, 20)
-                .padding(.bottom, 80)
+                .padding(.bottom, 20)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
