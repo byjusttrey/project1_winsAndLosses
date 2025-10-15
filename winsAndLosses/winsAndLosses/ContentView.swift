@@ -17,7 +17,7 @@ struct JournalEntry: Identifiable, Codable {
 }
 
 enum EntryType: String, Codable, CaseIterable {
-    case win = "Wins"
+    case win = "WINS"
     case loss = "Losses"
     case ofg = "OFGs"
     
