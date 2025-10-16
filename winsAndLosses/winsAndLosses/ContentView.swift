@@ -27,7 +27,7 @@ enum EntryType: String, Codable, CaseIterable, Hashable {
     var subtitle: String {
         switch self {
         case .win:  return "Things that went well"
-        case .loss: return "Things out of control"
+        case .loss: return "Things out of your control"
         case .ofg:  return "Opportunities for growth"
         }
     }
@@ -221,7 +221,7 @@ struct ContentView: View {
             } else {
                 ZStack {
                     TabView(selection: $selectedTab) {
-                        HomeView(viewModel: viewModel, selectedTab: $selectedTab)
+                        HomeView(viewModel: viewModel, selectedTab: $selectedTab, userStore: userStore)
                             .tag(0)
                         JournalView(viewModel: viewModel)
                             .tag(1)
@@ -536,7 +536,9 @@ struct LogoutSheet: View {
 struct HomeView: View {
     @ObservedObject var viewModel: JournalViewModel
     @Binding var selectedTab: Int
+    @ObservedObject var userStore: UserStore
     @State private var showingNewEntry = false
+    @State private var newEntryType: EntryType = .win
     
     var body: some View {
         NavigationView {
@@ -544,7 +546,7 @@ struct HomeView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Hi there,")
+                            Text("Hi there, \(userStore.currentUser?.name ?? "")")
                                 .font(.title2).fontWeight(.semibold)
                             Text("How are you feeling today?")
                                 .font(.subheadline).foregroundColor(.gray)
@@ -557,6 +559,7 @@ struct HomeView: View {
                                     type: type,
                                     count: viewModel.entriesThisWeekMonToSun().filter { $0.type == type }.count
                                 ) {
+                                    newEntryType = type          // ← preselect tapped type
                                     showingNewEntry = true
                                 }
                             }
@@ -594,7 +597,8 @@ struct HomeView: View {
                 }
                 
                 Button {
-                    showingNewEntry = true
+                newEntryType = .win          // default when tapping +
+                showingNewEntry = true
                 } label: {
                     Image(systemName: "plus")
                         .font(.title2).foregroundColor(.white)
@@ -609,7 +613,7 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showingNewEntry) {
-            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
+            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry, selectedType: $newEntryType)
         }
     }
 }
@@ -618,6 +622,7 @@ struct JournalView: View {
     @ObservedObject var viewModel: JournalViewModel
     @State private var selectedFilter: EntryType? = nil
     @State private var showingNewEntry = false
+    @State private var newEntryType: EntryType = .win
     
     var filteredEntries: [JournalEntry] {
         if let filter = selectedFilter { return viewModel.entries.filter { $0.type == filter } }
@@ -647,7 +652,9 @@ struct JournalView: View {
                         Text("No entries yet").font(.headline)
                         Text("Start journaling your wins, losses, and growth opportunities")
                             .font(.subheadline).foregroundColor(.gray).multilineTextAlignment(.center)
-                        Button("Create Entry") { showingNewEntry = true }
+                        Button("Create Entry")
+                        { showingNewEntry = true
+                         newEntryType = selectedFilter ?? .win }
                             .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -672,6 +679,7 @@ struct JournalView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
+                        newEntryType = selectedFilter ?? .win
                         showingNewEntry = true
                     } label: {
                         Image(systemName: "plus.circle.fill").foregroundColor(.cyan)
@@ -680,7 +688,7 @@ struct JournalView: View {
             }
         }
         .sheet(isPresented: $showingNewEntry) {
-            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
+            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry, selectedType: $newEntryType)
         }
     }
 }
@@ -819,9 +827,10 @@ struct AppearanceSettings: View {
 struct NewEntryView: View {
     @ObservedObject var viewModel: JournalViewModel
     @Binding var isPresented: Bool
-    @State private var selectedType: EntryType = .win
+    @Binding var selectedType: EntryType     // ← was @State
+
     @State private var content: String = ""
-    
+
     var body: some View {
         NavigationView {
             VStack(spacing: 24) {
@@ -829,9 +838,7 @@ struct NewEntryView: View {
                     Text("What would you like to journal?").font(.headline)
                     HStack(spacing: 12) {
                         ForEach(EntryType.allCases, id: \.self) { type in
-                            Button {
-                                selectedType = type
-                            } label: {
+                            Button { selectedType = type } label: {
                                 VStack(spacing: 8) {
                                     Image(systemName: type.icon)
                                         .font(.title2)
