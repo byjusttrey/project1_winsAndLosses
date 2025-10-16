@@ -1,51 +1,39 @@
 import SwiftUI
 import Combine
 
+// =============================================================
 // MARK: - Models
+// =============================================================
 
-struct UserProfile: Identifiable, Codable, Equatable {
-    let id: UUID
-    var name: String
-    var emoji: String
-    
-    init(id: UUID = UUID(), name: String, emoji: String = "🐧") {
-        self.id = id
-        self.name = name
-        self.emoji = emoji
-    }
-}
-
-enum EntryType: String, Codable, CaseIterable {
+enum EntryType: String, Codable, CaseIterable, Hashable {
     case win = "Wins"
     case loss = "Losses"
     case ofg = "OFGs"
     
     var icon: String {
         switch self {
-        case .win: return "trophy.fill"
+        case .win:  return "trophy.fill"
         case .loss: return "cloud.rain.fill"
-        case .ofg: return "light.beacon.max.fill"
+        case .ofg:  return "light.beacon.max.fill"
         }
     }
-    
     var color: Color {
         switch self {
-        case .win: return .green
+        case .win:  return .green
         case .loss: return .orange
-        case .ofg: return .blue
+        case .ofg:  return .blue
         }
     }
-    
     var subtitle: String {
         switch self {
-        case .win: return "Things that went well"
+        case .win:  return "Things that went well"
         case .loss: return "Things out of control"
-        case .ofg: return "Opportunities for growth"
+        case .ofg:  return "Opportunities for growth"
         }
     }
 }
 
-struct JournalEntry: Identifiable, Codable {
+struct JournalEntry: Identifiable, Codable, Hashable {
     let id: UUID
     let type: EntryType
     let content: String
@@ -59,166 +47,149 @@ struct JournalEntry: Identifiable, Codable {
     }
 }
 
-// MARK: - Stores
+struct UserProfile: Identifiable, Codable, Hashable {
+    let id: UUID
+    var name: String
+    var emoji: String
+    /// Not secure – demo only. For production, use Keychain/crypto.
+    var pin: String
+    
+    init(id: UUID = UUID(), name: String, emoji: String, pin: String) {
+        self.id = id
+        self.name = name
+        self.emoji = emoji
+        self.pin = pin
+    }
+}
+
+// =============================================================
+// MARK: - Persistence Keys
+// =============================================================
+
+private enum StoreKeys {
+    static let profiles = "profiles_v2"
+    static let currentUserID = "current_user_id_v2"
+    static func entriesKey(for userID: UUID) -> String { "journalEntries_\(userID.uuidString)" }
+    static let appearance = "appAppearance" // "system" | "light" | "dark"
+}
+
+// =============================================================
+// MARK: - User Store (Profiles + Session)
+// =============================================================
 
 final class UserStore: ObservableObject {
-    @Published private(set) var profiles: [UserProfile] = []
-    @Published var currentProfileID: UUID? {
-        didSet { save() }
-    }
-    
-    var currentProfile: UserProfile? {
-        guard let id = currentProfileID else { return nil }
-        return profiles.first(where: { $0.id == id })
-    }
+    @Published private(set) var users: [UserProfile] = []
+    @Published var currentUserID: UUID? = nil
     
     init() {
-        load()
-    }
-    
-    func addProfile(name: String, emoji: String) {
-        let profile = UserProfile(name: name, emoji: emoji)
-        profiles.append(profile)
-        currentProfileID = profile.id
-        save()
-    }
-    
-    func deleteProfile(_ profile: UserProfile) {
-        // Delete the user’s journal bucket, too.
-        let key = "journalEntries_\(profile.id.uuidString)"
-        UserDefaults.standard.removeObject(forKey: key)
-        
-        profiles.removeAll { $0.id == profile.id }
-        if currentProfileID == profile.id {
-            currentProfileID = profiles.first?.id
+        loadProfiles()
+        if let saved = UserDefaults.standard.string(forKey: StoreKeys.currentUserID),
+           let uuid = UUID(uuidString: saved),
+           users.contains(where: { $0.id == uuid }) {
+            currentUserID = uuid
         }
-        save()
     }
     
-    func switchTo(_ profile: UserProfile) {
-        currentProfileID = profile.id
+    var currentUser: UserProfile? {
+        guard let id = currentUserID else { return nil }
+        return users.first(where: { $0.id == id })
     }
     
-    private func save() {
-        let encoder = JSONEncoder()
-        if let data = try? encoder.encode(profiles) {
-            UserDefaults.standard.set(data, forKey: "profiles")
-        }
-        if let id = currentProfileID {
-            UserDefaults.standard.set(id.uuidString, forKey: "currentProfileID")
+    func addUser(_ profile: UserProfile) {
+        users.append(profile)
+        saveProfiles()
+    }
+    
+    func setCurrentUser(_ id: UUID?) {
+        currentUserID = id
+        if let id = id {
+            UserDefaults.standard.set(id.uuidString, forKey: StoreKeys.currentUserID)
         } else {
-            UserDefaults.standard.removeObject(forKey: "currentProfileID")
+            UserDefaults.standard.removeObject(forKey: StoreKeys.currentUserID)
         }
     }
     
-    private func load() {
-        let decoder = JSONDecoder()
-        if let data = UserDefaults.standard.data(forKey: "profiles"),
-           let decoded = try? decoder.decode([UserProfile].self, from: data) {
-            profiles = decoded
+    func logout() {
+        setCurrentUser(nil)
+    }
+    
+    private func saveProfiles() {
+        if let data = try? JSONEncoder().encode(users) {
+            UserDefaults.standard.set(data, forKey: StoreKeys.profiles)
         }
-        if let idString = UserDefaults.standard.string(forKey: "currentProfileID"),
-           let id = UUID(uuidString: idString) {
-            currentProfileID = id
+    }
+    private func loadProfiles() {
+        if let data = UserDefaults.standard.data(forKey: StoreKeys.profiles),
+           let decoded = try? JSONDecoder().decode([UserProfile].self, from: data) {
+            users = decoded
+        } else {
+            users = []
         }
     }
 }
 
+// =============================================================
+// MARK: - Journal ViewModel (per-user storage)
+// =============================================================
+
 final class JournalViewModel: ObservableObject {
-    @Published private(set) var entries: [JournalEntry] = []
-    private(set) var profileID: UUID? = nil
+    @Published var entries: [JournalEntry] = []
+    private var userID: UUID?
     
-    init(profileID: UUID?) {
-        setProfile(profileID)
-    }
-    
-    func setProfile(_ id: UUID?) {
-        profileID = id
+    init(userID: UUID?) {
+        self.userID = userID
         loadEntries()
     }
     
-    // CRUD
+    func updateUser(_ userID: UUID?) {
+        self.userID = userID
+        loadEntries()
+    }
+    
     func addEntry(_ entry: JournalEntry) {
         entries.append(entry)
         saveEntries()
     }
-    
     func deleteEntry(_ entry: JournalEntry) {
         entries.removeAll { $0.id == entry.id }
         saveEntries()
     }
     
-    // Queries
     func entriesForType(_ type: EntryType) -> [JournalEntry] {
         entries.filter { $0.type == type }
     }
-    
-    func entriesThisWeek() -> [JournalEntry] {
-        let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-        return entries.filter { $0.date >= weekAgo }
+    func entriesForDay(_ date: Date) -> [JournalEntry] {
+        let cal = Calendar.current
+        return entries.filter { cal.isDate($0.date, inSameDayAs: date) }
     }
-    
+    func entriesThisWeekMonToSun() -> [JournalEntry] {
+        let cal = Calendar.current
+        let start = cal.startOfCurrentWeekMonday()
+        let end = cal.date(byAdding: .day, value: 7, to: start)!
+        return entries.filter { $0.date >= start && $0.date < end }
+    }
     func currentStreak() -> Int {
         guard !entries.isEmpty else { return 0 }
-        let calendar = Calendar.current
-        let sortedDays = entries
-            .map { calendar.startOfDay(for: $0.date) }
-            .sorted(by: >)
-        
-        guard let mostRecent = sortedDays.first else { return 0 }
-        let today = calendar.startOfDay(for: Date())
-        if mostRecent < calendar.date(byAdding: .day, value: -1, to: today)! {
-            return 0
-        }
-        
+        let cal = Calendar.current
+        let days = Set(entries.map { cal.startOfDay(for: $0.date) })
         var streak = 0
-        var cursor = today
-        var i = 0
-        while i < sortedDays.count {
-            let day = sortedDays[i]
-            if calendar.isDate(day, inSameDayAs: cursor) {
-                streak += 1
-                cursor = calendar.date(byAdding: .day, value: -1, to: cursor) ?? cursor
-                // advance past all items that match this cursor day
-                while i < sortedDays.count && calendar.isDate(sortedDays[i], inSameDayAs: day) {
-                    i += 1
-                }
-            } else {
-                // break if gap
-                if day < cursor {
-                    break
-                } else {
-                    i += 1
-                }
-            }
+        var cursor = cal.startOfDay(for: Date())
+        while days.contains(cursor) {
+            streak += 1
+            cursor = cal.date(byAdding: .day, value: -1, to: cursor)!
         }
         return streak
     }
     
-    func entriesForDay(_ date: Date) -> [JournalEntry] {
-        let calendar = Calendar.current
-        return entries.filter { calendar.isDate($0.date, inSameDayAs: date) }
-    }
-    
-    // Persistence (per-profile)
-    private func bucketKey() -> String? {
-        guard let id = profileID else { return nil }
-        return "journalEntries_\(id.uuidString)"
-    }
-    
     private func saveEntries() {
-        guard let key = bucketKey() else { return }
-        if let encoded = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(encoded, forKey: key)
+        guard let userID = userID else { return }
+        if let data = try? JSONEncoder().encode(entries) {
+            UserDefaults.standard.set(data, forKey: StoreKeys.entriesKey(for: userID))
         }
     }
-    
     private func loadEntries() {
-        guard let key = bucketKey() else {
-            entries = []
-            return
-        }
-        if let data = UserDefaults.standard.data(forKey: key),
+        guard let userID = userID else { entries = []; return }
+        if let data = UserDefaults.standard.data(forKey: StoreKeys.entriesKey(for: userID)),
            let decoded = try? JSONDecoder().decode([JournalEntry].self, from: data) {
             entries = decoded
         } else {
@@ -227,162 +198,344 @@ final class JournalViewModel: ObservableObject {
     }
 }
 
-// MARK: - Root View
+// =============================================================
+// MARK: - Root App ContentView
+// =============================================================
 
 struct ContentView: View {
     @StateObject private var userStore = UserStore()
-    @StateObject private var viewModel: JournalViewModel
-    @State private var selectedTab = 0
-    @State private var showProfileSheet = false
-    @State private var showOnboarding = false
+    @StateObject private var viewModel = JournalViewModel(userID: nil)
+    @AppStorage(StoreKeys.appearance) private var appAppearance = "system" // "system" | "light" | "dark"
     
-    init() {
-        let store = UserStore()
-        _viewModel = StateObject(wrappedValue: JournalViewModel(profileID: store.currentProfileID))
-    }
+    @State private var selectedTab = 0
+    @State private var showProfilePicker = false
+    @State private var showLockSheet = false
     
     var body: some View {
         Group {
-            if userStore.currentProfile == nil {
-                OnboardingView { name, emoji in
-                    userStore.addProfile(name: name, emoji: emoji)
-                    viewModel.setProfile(userStore.currentProfileID)
+            if userStore.currentUser == nil {
+                AuthGateView(userStore: userStore) { loggedInUser in
+                    userStore.setCurrentUser(loggedInUser.id)
+                    viewModel.updateUser(loggedInUser.id)
                 }
             } else {
                 ZStack {
                     TabView(selection: $selectedTab) {
-                        HomeView(
-                            viewModel: viewModel,
-                            selectedTab: $selectedTab,
-                            userStore: userStore,
-                            onShowProfiles: { showProfileSheet = true }
-                        )
-                        .tag(0)
-                        
+                        HomeView(viewModel: viewModel, selectedTab: $selectedTab)
+                            .tag(0)
                         JournalView(viewModel: viewModel)
                             .tag(1)
-                        
                         AnalyticsView(viewModel: viewModel)
                             .tag(2)
-                        
-                        ProfileView(userStore: userStore, onManageProfiles: {
-                            showProfileSheet = true
-                        })
+                        ProfileView(
+                            userStore: userStore,
+                            onSwitchProfiles: { showProfilePicker = true },
+                            onLogout: { showLockSheet = true },
+                            appAppearance: $appAppearance
+                        )
                         .tag(3)
                     }
-                    
-                    VStack {
-                        Spacer()
-                        CustomTabBar(selectedTab: $selectedTab)
+                    VStack { Spacer(); CustomTabBar(selectedTab: $selectedTab) }
+                }
+                .sheet(isPresented: $showProfilePicker) {
+                    SwitchProfileSheet(userStore: userStore) { newUser in
+                        userStore.setCurrentUser(newUser.id)
+                        viewModel.updateUser(newUser.id)
                     }
                 }
-                .sheet(isPresented: $showProfileSheet) {
-                    ProfileSwitcherSheet(userStore: userStore,
-                                         onSwitch: { profile in
-                        userStore.switchTo(profile)
-                        viewModel.setProfile(profile.id)
-                    }, onDelete: { profile in
-                        let isDeletingCurrent = (userStore.currentProfileID == profile.id)
-                        userStore.deleteProfile(profile)
-                        viewModel.setProfile(userStore.currentProfileID) // move to next or nil
-                        if isDeletingCurrent && userStore.currentProfileID == nil {
-                            selectedTab = 0
-                        }
-                    }, onCreate: { name, emoji in
-                        userStore.addProfile(name: name, emoji: emoji)
-                        viewModel.setProfile(userStore.currentProfileID)
-                    })
+                .sheet(isPresented: $showLockSheet) {
+                    LogoutSheet {
+                        // lock -> back to auth gate
+                        userStore.logout()
+                        viewModel.updateUser(nil)
+                    }
                 }
             }
         }
-        .onChange(of: userStore.currentProfileID) { _, newID in
-            viewModel.setProfile(newID)
+        .preferredColorScheme(preferredScheme(from: appAppearance))
+    }
+    
+    private func preferredScheme(from value: String) -> ColorScheme? {
+        switch value {
+        case "light": return .light
+        case "dark":  return .dark
+        default:      return nil
         }
     }
 }
 
-// MARK: - Onboarding
+// =============================================================
+// MARK: - Authentication (Onboarding + Login)
+// =============================================================
 
-struct OnboardingView: View {
-    @State private var name: String = ""
-    @State private var emoji: String = "🐧"
-    let onCreate: (String, String) -> Void
+struct AuthGateView: View {
+    @ObservedObject var userStore: UserStore
+    var onLogin: (UserProfile) -> Void
     
-    private let suggestedEmojis = ["🐧","🙂","🤓","🏆","🌈","🦊","🐯","🦄","🌊","🌞"]
+    @State private var showingCreate = false
+    @State private var selectedProfile: UserProfile? = nil
+    @State private var pinInput: String = ""
+    @State private var pinError: String? = nil
     
     var body: some View {
         NavigationView {
             VStack(spacing: 24) {
-                Text("Welcome to Wins & Losses")
+                Text("Who’s journaling?")
                     .font(.title)
                     .fontWeight(.bold)
                 
-                Text("Create a profile so your entries and analytics are just for you.")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                VStack(spacing: 12) {
-                    Text("Choose an avatar")
-                        .font(.headline)
-                    Text(emoji)
-                        .font(.system(size: 64))
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
-                            ForEach(suggestedEmojis, id: \.self) { e in
-                                Button(e) { emoji = e }
-                                    .font(.largeTitle)
-                                    .padding(8)
-                                    .background(emoji == e ? Color.cyan.opacity(0.2) : Color(.systemGray6))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-                        }
-                        .padding(.horizontal)
+                if userStore.users.isEmpty {
+                    EmptyProfilesCard {
+                        showingCreate = true
+                    }
+                } else {
+                    EmojiGrid(profiles: userStore.users) { profile in
+                        selectedProfile = profile
+                        pinInput = ""
+                        pinError = nil
                     }
                 }
                 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Your name")
-                        .font(.headline)
-                    TextField("e.g. Kenya", text: $name)
-                        .textInputAutocapitalization(.words)
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                if let chosen = selectedProfile {
+                    VStack(spacing: 12) {
+                        Text("\(chosen.emoji)  \(chosen.name)")
+                            .font(.headline)
+                        SecurePINField(pin: $pinInput)
+                        if let err = pinError {
+                            Text(err).font(.caption).foregroundColor(.red)
+                        }
+                        Button("Unlock") {
+                            if pinInput == chosen.pin {
+                                onLogin(chosen)
+                            } else {
+                                pinError = "Incorrect PIN. Try again."
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(pinInput.count != 4)
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.horizontal)
                 
                 Spacer()
                 
                 Button {
-                    guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                    onCreate(name.trimmingCharacters(in: .whitespacesAndNewlines), emoji)
+                    showingCreate = true
                 } label: {
-                    Text("Create Profile")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(name.isEmpty ? Color.gray : Color.cyan)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Label("Create New Profile", systemImage: "plus.circle.fill")
                 }
-                .disabled(name.isEmpty)
-                .padding(.horizontal)
             }
-            .padding(.vertical)
-            .navigationTitle("Get Started")
+            .padding()
+            .navigationTitle("Welcome")
+        }
+        .sheet(isPresented: $showingCreate) {
+            CreateProfileSheet { newProfile in
+                userStore.addUser(newProfile)
+                onLogin(newProfile)
+            }
         }
     }
 }
 
-// MARK: - Home
+struct EmptyProfilesCard: View {
+    var action: () -> Void
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("No profiles yet")
+                .font(.headline)
+            Text("Create a profile to keep entries and analytics separate.")
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+            Button("Create Profile", action: action)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct EmojiGrid: View {
+    let profiles: [UserProfile]
+    var onTap: (UserProfile) -> Void
+    
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(profiles) { p in
+                    Button {
+                        onTap(p)
+                    } label: {
+                        VStack(spacing: 8) {
+                            Text(p.emoji).font(.system(size: 44))
+                            Text(p.name)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 84)
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct SecurePINField: View {
+    @Binding var pin: String
+    var body: some View {
+        TextField("4-digit PIN", text: Binding(
+            get: { pin },
+            set: { pin = String($0.prefix(4)).filter { $0.isNumber } }
+        ))
+        .keyboardType(.numberPad)
+        .textContentType(.oneTimeCode)
+        .multilineTextAlignment(.center)
+        .font(.title2.monospacedDigit())
+        .padding(10)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+        .frame(maxWidth: 180)
+    }
+}
+
+struct CreateProfileSheet: View {
+    var onCreate: (UserProfile) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var emoji = "🐧"
+    @State private var pin = ""
+    
+    private let emojis = ["🐧","🐯","🦄","🐼","🐨","🦊","🐵","🐸","🐙","🐳","🐝","🦖","🐰","🐶","🐱","🐻‍❄️"]
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Avatar") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            ForEach(emojis, id: \.self) { e in
+                                Button {
+                                    emoji = e
+                                } label: {
+                                    Text(e).font(.system(size: 36))
+                                        .padding(8)
+                                        .background(emoji == e ? Color.cyan.opacity(0.2) : .clear)
+                                        .cornerRadius(10)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                Section("Details") {
+                    TextField("Name", text: $name)
+                    SecurePINField(pin: $pin)
+                }
+            }
+            .navigationTitle("New Profile")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        let profile = UserProfile(name: name.isEmpty ? "User" : name,
+                                                  emoji: emoji,
+                                                  pin: pin)
+                        onCreate(profile)
+                        dismiss()
+                    }
+                    .disabled(pin.count != 4)
+                }
+            }
+        }
+    }
+}
+
+struct SwitchProfileSheet: View {
+    @ObservedObject var userStore: UserStore
+    var onSwitch: (UserProfile) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedUser: UserProfile? = nil
+    @State private var pin = ""
+    @State private var error: String? = nil
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 16) {
+                EmojiGrid(profiles: userStore.users) { p in
+                    selectedUser = p
+                    pin = ""
+                    error = nil
+                }
+                if let u = selectedUser {
+                    VStack(spacing: 8) {
+                        Text("\(u.emoji)  \(u.name)").font(.headline)
+                        SecurePINField(pin: $pin)
+                        if let e = error { Text(e).font(.caption).foregroundColor(.red) }
+                        Button("Switch") {
+                            if pin == u.pin {
+                                onSwitch(u)
+                                dismiss()
+                            } else {
+                                error = "Incorrect PIN"
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(pin.count != 4)
+                    }
+                    .padding(.bottom, 8)
+                }
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Switch Profile")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+            }
+        }
+    }
+}
+
+struct LogoutSheet: View {
+    var onConfirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "lock.fill").font(.largeTitle)
+            Text("Lock & Log Out").font(.headline)
+            Text("You'll return to the login screen. Your data stays on this device, isolated per profile.")
+                .font(.subheadline).multilineTextAlignment(.center).foregroundColor(.gray)
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Log Out") {
+                    onConfirm()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.top, 8)
+        }
+        .padding()
+    }
+}
+
+// =============================================================
+// MARK: - Main Screens
+// =============================================================
 
 struct HomeView: View {
     @ObservedObject var viewModel: JournalViewModel
     @Binding var selectedTab: Int
-    let userStore: UserStore
-    let onShowProfiles: () -> Void
     @State private var showingNewEntry = false
     
     var body: some View {
@@ -391,7 +544,7 @@ struct HomeView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("\(userStore.currentProfile?.emoji ?? "👋")  Hi \(userStore.currentProfile?.name ?? "there"),")
+                            Text("Hi there,")
                                 .font(.title2).fontWeight(.semibold)
                             Text("How are you feeling today?")
                                 .font(.subheadline).foregroundColor(.gray)
@@ -402,9 +555,10 @@ struct HomeView: View {
                             ForEach(EntryType.allCases, id: \.self) { type in
                                 StatCard(
                                     type: type,
-                                    count: viewModel.entriesThisWeek().filter { $0.type == type }.count,
-                                    action: { showingNewEntry = true }
-                                )
+                                    count: viewModel.entriesThisWeekMonToSun().filter { $0.type == type }.count
+                                ) {
+                                    showingNewEntry = true
+                                }
                             }
                         }
                         
@@ -425,11 +579,9 @@ struct HomeView: View {
                                 Button("View all") { selectedTab = 1 }
                                     .font(.subheadline).foregroundColor(.blue)
                             }
-                            
                             if viewModel.entries.isEmpty {
                                 Text("No entries yet. Start journaling!")
-                                    .font(.subheadline).foregroundColor(.gray)
-                                    .padding(.vertical)
+                                    .font(.subheadline).foregroundColor(.gray).padding(.vertical)
                             } else {
                                 ForEach(viewModel.entries.sorted(by: { $0.date > $1.date }).prefix(3)) { entry in
                                     EntryRow(entry: entry)
@@ -441,7 +593,9 @@ struct HomeView: View {
                     .padding(.horizontal)
                 }
                 
-                Button(action: { showingNewEntry = true }) {
+                Button {
+                    showingNewEntry = true
+                } label: {
                     Image(systemName: "plus")
                         .font(.title2).foregroundColor(.white)
                         .frame(width: 56, height: 56)
@@ -453,20 +607,6 @@ struct HomeView: View {
                 .padding(.bottom, 80)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: onShowProfiles) {
-                        Text(userStore.currentProfile?.emoji ?? "🙂")
-                            .font(.system(size: 28))
-                    }
-                    .accessibilityLabel("Switch Profile")
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {}) {
-                        Image(systemName: "bell").foregroundColor(.primary)
-                    }
-                }
-            }
         }
         .sheet(isPresented: $showingNewEntry) {
             NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
@@ -474,188 +614,13 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Profile Switcher Sheet
-
-struct ProfileSwitcherSheet: View {
-    @ObservedObject var userStore: UserStore
-    let onSwitch: (UserProfile) -> Void
-    let onDelete: (UserProfile) -> Void
-    let onCreate: (String, String) -> Void
-    
-    @State private var newName: String = ""
-    @State private var newEmoji: String = "🐧"
-    private let emojiChoices = ["🐧","🙂","🤠","🐯","🦄","🐼","🐶","🐱","🦊","🐵","🐸","🐙","🦋","🌟","🌈"]
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 16) {
-                if userStore.profiles.isEmpty {
-                    Text("No profiles yet. Create one below.")
-                        .foregroundColor(.gray)
-                } else {
-                    List {
-                        Section("Profiles") {
-                            ForEach(userStore.profiles) { profile in
-                                HStack {
-                                    Text(profile.emoji)
-                                    Text(profile.name)
-                                    Spacer()
-                                    if userStore.currentProfileID == profile.id {
-                                        Text("Current")
-                                            .font(.caption)
-                                            .foregroundColor(.blue)
-                                    }
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture { onSwitch(profile) }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        onDelete(profile)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                }
-                
-                VStack(spacing: 12) {
-                    Text("Create New Profile").font(.headline)
-                    HStack {
-                        Menu(newEmoji) {
-                            ForEach(emojiChoices, id: \.self) { e in
-                                Button(e) { newEmoji = e }
-                            }
-                        }
-                        .font(.largeTitle)
-                        
-                        TextField("Name", text: $newName)
-                            .padding(10)
-                            .background(Color(.systemGray6))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    
-                    Button {
-                        guard !newName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                        onCreate(newName.trimmingCharacters(in: .whitespaces), newEmoji)
-                        newName = ""
-                        newEmoji = "🐧"
-                    } label: {
-                        Text("Add Profile")
-                            .font(.headline).foregroundColor(.white)
-                            .frame(maxWidth: .infinity).padding()
-                            .background(newName.isEmpty ? Color.gray : Color.cyan)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .disabled(newName.isEmpty)
-                }
-                .padding()
-            }
-            .navigationTitle("Switch Profile")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { UIApplication.shared.endEditing() }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - New Entry
-
-struct NewEntryView: View {
-    @ObservedObject var viewModel: JournalViewModel
-    @Binding var isPresented: Bool
-    @State private var selectedType: EntryType = .win
-    @State private var content: String = ""
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 24) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("What would you like to journal?")
-                        .font(.headline)
-                    
-                    HStack(spacing: 12) {
-                        ForEach(EntryType.allCases, id: \.self) { type in
-                            Button(action: { selectedType = type }) {
-                                VStack(spacing: 8) {
-                                    Image(systemName: type.icon)
-                                        .font(.title2)
-                                        .foregroundColor(selectedType == type ? .white : type.color)
-                                    Text(type.rawValue)
-                                        .font(.caption)
-                                        .foregroundColor(selectedType == type ? .white : .primary)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(selectedType == type ? type.color : Color(.systemGray6))
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                        }
-                    }
-                }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(selectedType.subtitle)
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                    
-                    TextEditor(text: $content)
-                        .frame(height: 200)
-                        .padding(8)
-                        .background(Color(.systemGray6))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color(.systemGray4), lineWidth: 1)
-                        )
-                }
-                
-                Spacer()
-                
-                Button(action: {
-                    if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let entry = JournalEntry(type: selectedType, content: content.trimmingCharacters(in: .whitespacesAndNewlines))
-                        viewModel.addEntry(entry)
-                        isPresented = false
-                    }
-                }) {
-                    Text("Save Entry")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray : Color.cyan)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding()
-            .navigationTitle("New Entry")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { isPresented = false }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Journal
-
 struct JournalView: View {
     @ObservedObject var viewModel: JournalViewModel
-    @State private var selectedFilter: EntryType?
+    @State private var selectedFilter: EntryType? = nil
     @State private var showingNewEntry = false
     
     var filteredEntries: [JournalEntry] {
-        if let filter = selectedFilter {
-            return viewModel.entries.filter { $0.type == filter }
-        }
+        if let filter = selectedFilter { return viewModel.entries.filter { $0.type == filter } }
         return viewModel.entries
     }
     
@@ -664,15 +629,11 @@ struct JournalView: View {
             VStack(spacing: 0) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        FilterChip(title: "All", isSelected: selectedFilter == nil) {
-                            selectedFilter = nil
-                        }
+                        FilterChip(title: "All", isSelected: selectedFilter == nil) { selectedFilter = nil }
                         ForEach(EntryType.allCases, id: \.self) { type in
-                            FilterChip(
-                                title: type.rawValue,
-                                isSelected: selectedFilter == type,
-                                color: type.color
-                            ) { selectedFilter = type }
+                            FilterChip(title: type.rawValue,
+                                       isSelected: selectedFilter == type,
+                                       color: type.color) { selectedFilter = type }
                         }
                     }
                     .padding(.horizontal)
@@ -682,20 +643,12 @@ struct JournalView: View {
                 
                 if filteredEntries.isEmpty {
                     VStack(spacing: 16) {
-                        Image(systemName: "book.closed")
-                            .font(.system(size: 60))
-                            .foregroundColor(.gray)
+                        Image(systemName: "book.closed").font(.system(size: 60)).foregroundColor(.gray)
                         Text("No entries yet").font(.headline)
                         Text("Start journaling your wins, losses, and growth opportunities")
-                            .font(.subheadline).foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                        Button(action: { showingNewEntry = true }) {
-                            Text("Create Entry")
-                                .font(.headline).foregroundColor(.white)
-                                .padding(.horizontal, 24).padding(.vertical, 12)
-                                .background(Color.cyan)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
+                            .font(.subheadline).foregroundColor(.gray).multilineTextAlignment(.center)
+                        Button("Create Entry") { showingNewEntry = true }
+                            .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
@@ -706,9 +659,7 @@ struct JournalView: View {
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        viewModel.deleteEntry(entry)
-                                    } label: {
+                                    Button(role: .destructive) { viewModel.deleteEntry(entry) } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
                                 }
@@ -720,7 +671,9 @@ struct JournalView: View {
             .navigationTitle("Journal")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showingNewEntry = true }) {
+                    Button {
+                        showingNewEntry = true
+                    } label: {
                         Image(systemName: "plus.circle.fill").foregroundColor(.cyan)
                     }
                 }
@@ -732,8 +685,6 @@ struct JournalView: View {
     }
 }
 
-// MARK: - Analytics
-
 struct AnalyticsView: View {
     @ObservedObject var viewModel: JournalViewModel
     
@@ -742,38 +693,19 @@ struct AnalyticsView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Overview")
-                            .font(.title2).fontWeight(.bold)
-                        
+                        Text("Overview").font(.title2).fontWeight(.bold)
                         HStack(spacing: 16) {
-                            AnalyticCard(title: "Total Entries",
-                                         value: "\(viewModel.entries.count)",
-                                         icon: "doc.text.fill",
-                                         color: .purple)
-                            
-                            AnalyticCard(title: "Current Streak",
-                                         value: "\(viewModel.currentStreak())",
-                                         icon: "flame.fill",
-                                         color: .orange)
+                            AnalyticCard(title: "Total Entries", value: "\(viewModel.entries.count)", icon: "doc.text.fill", color: .purple)
+                            AnalyticCard(title: "Current Streak", value: "\(viewModel.currentStreak())", icon: "flame.fill", color: .orange)
                         }
-                        
                         HStack(spacing: 16) {
-                            AnalyticCard(title: "This Week",
-                                         value: "\(viewModel.entriesThisWeek().count)",
-                                         icon: "calendar",
-                                         color: .blue)
-                            
-                            AnalyticCard(title: "Best Day",
-                                         value: bestDay(),
-                                         icon: "star.fill",
-                                         color: .yellow)
+                            AnalyticCard(title: "This Week", value: "\(viewModel.entriesThisWeekMonToSun().count)", icon: "calendar", color: .blue)
+                            AnalyticCard(title: "Best Day", value: bestDay(), icon: "star.fill", color: .yellow)
                         }
                     }
                     
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Entry Breakdown")
-                            .font(.title2).fontWeight(.bold)
-                        
+                        Text("Entry Breakdown").font(.title2).fontWeight(.bold)
                         ForEach(EntryType.allCases, id: \.self) { type in
                             EntryBreakdownRow(type: type,
                                               count: viewModel.entriesForType(type).count,
@@ -782,8 +714,7 @@ struct AnalyticsView: View {
                     }
                     
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Weekly Activity")
-                            .font(.title2).fontWeight(.bold)
+                        Text("Weekly Activity").font(.title2).fontWeight(.bold)
                         WeeklyActivityChart(viewModel: viewModel)
                     }
                 }
@@ -794,67 +725,67 @@ struct AnalyticsView: View {
     }
     
     private func bestDay() -> String {
-        let calendar = Calendar.current
+        let cal = Calendar.current
         var dayCounts: [Int: Int] = [:]
         for entry in viewModel.entries {
-            let weekday = calendar.component(.weekday, from: entry.date)
+            let weekday = cal.component(.weekday, from: entry.date) // 1=Sun...7=Sat
             dayCounts[weekday, default: 0] += 1
         }
         guard let maxDay = dayCounts.max(by: { $0.value < $1.value }) else { return "N/A" }
-        let dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
-        return dayNames[maxDay.key - 1]
+        let names = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+        return names[maxDay.key - 1]
     }
 }
 
-// MARK: - Profile
-
 struct ProfileView: View {
     @ObservedObject var userStore: UserStore
-    let onManageProfiles: () -> Void
+    var onSwitchProfiles: () -> Void
+    var onLogout: () -> Void
+    @Binding var appAppearance: String
     
     var body: some View {
         NavigationView {
             List {
-                Section {
-                    HStack {
-                        Text(userStore.currentProfile?.emoji ?? "🙂")
-                            .font(.system(size: 60))
-                        VStack(alignment: .leading) {
-                            Text(userStore.currentProfile?.name ?? "User")
-                                .font(.title2).fontWeight(.semibold)
-                            Text("Local Profile")
-                                .font(.subheadline).foregroundColor(.gray)
+                if let u = userStore.currentUser {
+                    Section {
+                        HStack {
+                            Text(u.emoji).font(.system(size: 60))
+                            VStack(alignment: .leading) {
+                                Text(u.name).font(.title2).fontWeight(.semibold)
+                                Text("Local profile").font(.subheadline).foregroundColor(.gray)
+                            }
+                            .padding(.leading, 8)
                         }
-                        .padding(.leading, 8)
-                    }
-                    .padding(.vertical, 8)
-                }
-                
-                Section("Profiles") {
-                    Button {
-                        onManageProfiles()
-                    } label: {
-                        Label("Manage / Switch Profiles", systemImage: "person.2.circle")
+                        .padding(.vertical, 8)
                     }
                 }
                 
                 Section("Preferences") {
-                    NavigationLink(destination: Text("Notifications")) {
-                        Label("Notifications", systemImage: "bell")
-                    }
-                    NavigationLink(destination: Text("Reminders")) {
-                        Label("Daily Reminders", systemImage: "clock")
-                    }
-                    NavigationLink(destination: Text("Appearance")) {
+                    NavigationLink {
+                        AppearanceSettings(appAppearance: $appAppearance)
+                    } label: {
                         Label("Appearance", systemImage: "paintbrush")
                     }
                 }
                 
+                Section("Accounts") {
+                    Button {
+                        onSwitchProfiles()
+                    } label: {
+                        Label("Switch Profile", systemImage: "person.2")
+                    }
+                    Button(role: .destructive) {
+                        onLogout()
+                    } label: {
+                        Label("Log Out", systemImage: "lock.fill")
+                    }
+                }
+                
                 Section("Support") {
-                    NavigationLink(destination: Text("Help")) {
+                    NavigationLink(destination: Text("Help & Support coming soon")) {
                         Label("Help & Support", systemImage: "questionmark.circle")
                     }
-                    NavigationLink(destination: Text("About")) {
+                    NavigationLink(destination: Text("About this app")) {
                         Label("About", systemImage: "info.circle")
                     }
                 }
@@ -864,60 +795,139 @@ struct ProfileView: View {
     }
 }
 
-// MARK: - Supporting Views
+struct AppearanceSettings: View {
+    @Binding var appAppearance: String
+    var body: some View {
+        Form {
+            Section(footer: Text("“System” follows your iPhone’s appearance setting.")) {
+                Picker("Appearance", selection: $appAppearance) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .navigationTitle("Appearance")
+    }
+}
+
+// =============================================================
+// MARK: - New Entry & Components
+// =============================================================
+
+struct NewEntryView: View {
+    @ObservedObject var viewModel: JournalViewModel
+    @Binding var isPresented: Bool
+    @State private var selectedType: EntryType = .win
+    @State private var content: String = ""
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("What would you like to journal?").font(.headline)
+                    HStack(spacing: 12) {
+                        ForEach(EntryType.allCases, id: \.self) { type in
+                            Button {
+                                selectedType = type
+                            } label: {
+                                VStack(spacing: 8) {
+                                    Image(systemName: type.icon)
+                                        .font(.title2)
+                                        .foregroundColor(selectedType == type ? .white : type.color)
+                                    Text(type.rawValue)
+                                        .font(.caption)
+                                        .foregroundColor(selectedType == type ? .white : .primary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(selectedType == type ? type.color : Color(.systemGray6))
+                                .cornerRadius(12)
+                            }
+                        }
+                    }
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(selectedType.subtitle).font(.subheadline).foregroundColor(.gray)
+                    TextEditor(text: $content)
+                        .frame(height: 200)
+                        .padding(8)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.systemGray4), lineWidth: 1))
+                }
+                
+                Spacer()
+                
+                Button {
+                    if !content.isEmpty {
+                        let entry = JournalEntry(type: selectedType, content: content)
+                        viewModel.addEntry(entry)
+                        isPresented = false
+                    }
+                } label: {
+                    Text("Save Entry")
+                        .font(.headline).foregroundColor(.white)
+                        .frame(maxWidth: .infinity).padding()
+                        .background(content.isEmpty ? Color.gray : Color.cyan)
+                        .cornerRadius(12)
+                }
+                .disabled(content.isEmpty)
+            }
+            .padding()
+            .navigationTitle("New Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { isPresented = false } }
+            }
+        }
+    }
+}
 
 struct StatCard: View {
     let type: EntryType
     let count: Int
-    let action: () -> Void
+    var action: () -> Void
     
     var body: some View {
         HStack {
             Image(systemName: type.icon)
-                .font(.title2)
-                .foregroundColor(type.color)
+                .font(.title2).foregroundColor(type.color)
                 .frame(width: 48, height: 48)
                 .background(type.color.opacity(0.15))
                 .clipShape(Circle())
-            
             VStack(alignment: .leading, spacing: 4) {
                 Text(type.rawValue).font(.headline)
                 Text(type.subtitle).font(.subheadline).foregroundColor(.gray)
-                Text("\(count) entries this week")
-                    .font(.caption).foregroundColor(.gray).padding(.top, 2)
+                Text("\(count) entries this week").font(.caption).foregroundColor(.gray).padding(.top, 2)
             }
-            
             Spacer()
-            
             Button(action: action) {
-                Image(systemName: "plus")
-                    .font(.title3)
-                    .foregroundColor(.gray)
+                Image(systemName: "plus").font(.title3).foregroundColor(.gray)
             }
         }
         .padding()
         .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .cornerRadius(12)
     }
 }
 
 struct WeekChartView: View {
     @ObservedObject var viewModel: JournalViewModel
-    
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
-                ForEach(0..<7) { index in
-                    let date = Calendar.current.date(byAdding: .day, value: index - 6, to: Date()) ?? Date()
+                ForEach(0..<7, id: \.self) { offset in
+                    let date = Calendar.current.startOfCurrentWeekMonday().adding(days: offset)
                     let entries = viewModel.entriesForDay(date)
                     DayBar(entries: entries)
                 }
             }
             HStack(spacing: 8) {
                 ForEach(["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], id: \.self) { day in
-                    Text(day)
-                        .font(.caption).foregroundColor(.gray)
-                        .frame(maxWidth: .infinity)
+                    Text(day).font(.caption).foregroundColor(.gray).frame(maxWidth: .infinity)
                 }
             }
         }
@@ -926,13 +936,12 @@ struct WeekChartView: View {
 
 struct DayBar: View {
     let entries: [JournalEntry]
-    
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(entries.prefix(3)) { entry in
+            ForEach(entries.prefix(3), id: \.id) { entry in
                 RoundedRectangle(cornerRadius: 4)
                     .fill(entry.type.color)
-                    .frame(height: 40)
+                    .frame(height: max(30, CGFloat(40)))
             }
             if entries.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
@@ -947,20 +956,16 @@ struct DayBar: View {
 
 struct EntryRow: View {
     let entry: JournalEntry
-    
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: entry.type.icon)
-                .font(.body)
-                .foregroundColor(entry.type.color)
+                .font(.body).foregroundColor(entry.type.color)
                 .frame(width: 32, height: 32)
                 .background(entry.type.color.opacity(0.15))
                 .clipShape(Circle())
-            
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.content).font(.subheadline).lineLimit(2)
-                Text(entry.date, style: .relative)
-                    .font(.caption).foregroundColor(.gray)
+                Text(entry.date, style: .relative).font(.caption).foregroundColor(.gray)
             }
             Spacer()
         }
@@ -970,23 +975,20 @@ struct EntryRow: View {
 
 struct JournalEntryCard: View {
     let entry: JournalEntry
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: entry.type.icon).foregroundColor(entry.type.color)
                 Text(entry.type.rawValue).font(.headline).foregroundColor(entry.type.color)
                 Spacer()
-                Text(entry.date, style: .date)
-                    .font(.caption).foregroundColor(.gray)
+                Text(entry.date, style: .date).font(.caption).foregroundColor(.gray)
             }
             Text(entry.content).font(.body)
-            Text(entry.date, style: .time)
-                .font(.caption).foregroundColor(.gray)
+            Text(entry.date, style: .time).font(.caption).foregroundColor(.gray)
         }
         .padding()
         .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .cornerRadius(12)
     }
 }
 
@@ -995,7 +997,6 @@ struct FilterChip: View {
     let isSelected: Bool
     var color: Color = .blue
     let action: () -> Void
-    
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -1003,7 +1004,7 @@ struct FilterChip: View {
                 .foregroundColor(isSelected ? .white : .primary)
                 .padding(.horizontal, 16).padding(.vertical, 8)
                 .background(isSelected ? color : Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .cornerRadius(20)
         }
     }
 }
@@ -1013,7 +1014,6 @@ struct AnalyticCard: View {
     let value: String
     let icon: String
     let color: Color
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Image(systemName: icon).font(.title2).foregroundColor(color)
@@ -1023,7 +1023,7 @@ struct AnalyticCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .cornerRadius(12)
     }
 }
 
@@ -1036,7 +1036,6 @@ struct EntryBreakdownRow: View {
         guard total > 0 else { return 0 }
         return Double(count) / Double(total)
     }
-    
     var body: some View {
         VStack(spacing: 8) {
             HStack {
@@ -1044,39 +1043,37 @@ struct EntryBreakdownRow: View {
                 Text(type.rawValue).font(.subheadline)
                 Spacer()
                 Text("\(count)").font(.headline)
-                Text("(\(Int(percentage * 100))%)")
-                    .font(.caption).foregroundColor(.gray)
+                Text("(\(Int(percentage * 100))%)").font(.caption).foregroundColor(.gray)
             }
-            GeometryReader { geo in
+            GeometryReader { g in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color(.systemGray5)).frame(height: 8)
+                    RoundedRectangle(cornerRadius: 4).fill(Color(.systemGray5)).frame(height: 8)
                     RoundedRectangle(cornerRadius: 4)
                         .fill(type.color)
-                        .frame(width: geo.size.width * percentage, height: 8)
+                        .frame(width: g.size.width * percentage, height: 8)
                 }
             }
             .frame(height: 8)
         }
         .padding()
         .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .cornerRadius(12)
     }
 }
 
 struct WeeklyActivityChart: View {
     @ObservedObject var viewModel: JournalViewModel
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ForEach(0..<7) { index in
-                let date = Calendar.current.date(byAdding: .day, value: index - 6, to: Date()) ?? Date()
+            ForEach(0..<7, id: \.self) { offset in
+                let date = Calendar.current.startOfCurrentWeekMonday().adding(days: offset)
                 let entries = viewModel.entriesForDay(date)
                 HStack {
                     Text(date, format: .dateTime.weekday(.abbreviated))
-                        .font(.subheadline).frame(width: 40, alignment: .leading)
+                        .font(.subheadline)
+                        .frame(width: 40, alignment: .leading)
                     HStack(spacing: 4) {
-                        ForEach(entries.prefix(5)) { entry in
+                        ForEach(entries.prefix(5), id: \.id) { entry in
                             Circle().fill(entry.type.color).frame(width: 24, height: 24)
                         }
                         if entries.isEmpty {
@@ -1090,13 +1087,12 @@ struct WeeklyActivityChart: View {
         }
         .padding()
         .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .cornerRadius(12)
     }
 }
 
 struct CustomTabBar: View {
     @Binding var selectedTab: Int
-    
     var body: some View {
         HStack {
             TabBarItem(icon: "house.fill", label: "Home", isSelected: selectedTab == 0) { selectedTab = 0 }
@@ -1115,7 +1111,6 @@ struct TabBarItem: View {
     let label: String
     let isSelected: Bool
     let action: () -> Void
-    
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
@@ -1128,16 +1123,29 @@ struct TabBarItem: View {
     }
 }
 
-// MARK: - Helpers
+// =============================================================
+// MARK: - Calendar Helpers
+// =============================================================
 
-private extension UIApplication {
-    func endEditing() {
-        sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+extension Calendar {
+    /// Returns the Monday at 00:00 of the current week (ISO-like).
+    func startOfCurrentWeekMonday() -> Date {
+        let today = Date()
+        var cal = self
+        cal.firstWeekday = 2 // Monday
+        let startOfDay = cal.startOfDay(for: today)
+        let weekdayIdx = cal.component(.weekday, from: startOfDay) // 1..7 (Sun..Sat with firstWeekday taken into account)
+        // Compute distance from Monday
+        let distanceToMonday = (weekdayIdx + 5) % 7 // maps Mon->0, Tue->1, ..., Sun->6
+        return cal.date(byAdding: .day, value: -distanceToMonday, to: startOfDay)!
     }
 }
 
-// MARK: - Preview
-
-#Preview {
-    ContentView()
+extension Date {
+    func adding(days: Int) -> Date {
+        Calendar.current.date(byAdding: .day, value: days, to: self) ?? self
+    }
 }
+
+
+#Preview { ContentView() }
