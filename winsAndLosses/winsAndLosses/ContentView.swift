@@ -608,7 +608,7 @@ struct HomeView: View {
                         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
                 }
                 .padding(.trailing, 20)
-                .padding(.bottom, 80)
+                .padding(.bottom, 20)
             }
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -903,7 +903,7 @@ struct StatCard: View {
             Image(systemName: type.icon)
                 .font(.title2).foregroundColor(type.color)
                 .frame(width: 48, height: 48)
-                .background(type.color.opacity(0.15))
+                .background(.white.opacity(0.5))
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text(type.rawValue).font(.headline)
@@ -916,8 +916,13 @@ struct StatCard: View {
             }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(type.color.opacity(0.12))
         .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(type.color.opacity(0.4), lineWidth: 1.5)
+        )
+        .shadow(color: type.color.opacity(0.2), radius: 4, x: 0, y: 2)
     }
 }
 
@@ -954,6 +959,19 @@ struct DayBar: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color(.systemGray5))
                     .frame(height: 30)
+            } else {
+                // Calculate height per entry to fit within 100pt max
+                let maxHeight: CGFloat = 100
+                let spacing: CGFloat = 2
+                let entryCount = min(entries.count, 5) // Max 5 entries shown
+                let totalSpacing = spacing * CGFloat(entryCount - 1)
+                let heightPerEntry = (maxHeight - totalSpacing) / CGFloat(entryCount)
+                
+                ForEach(entries.prefix(5)) { entry in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(entry.type.color)
+                        .frame(height: heightPerEntry)
+                }
             }
         }
         .frame(maxWidth: .infinity)
