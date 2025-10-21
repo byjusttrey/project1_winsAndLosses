@@ -911,9 +911,6 @@ struct StatCard: View {
                 Text("\(count) entries this week").font(.caption).foregroundColor(.gray).padding(.top, 2)
             }
             Spacer()
-            Button(action: action) {
-                Image(systemName: "plus").font(.title3).foregroundColor(.gray)
-            }
         }
         .padding()
         .background(type.color.opacity(0.12))
@@ -950,27 +947,38 @@ struct DayBar: View {
     let entries: [JournalEntry]
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(entries.prefix(3), id: \.id) { entry in
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(entry.type.color)
-                    .frame(height: max(30, CGFloat(40)))
-            }
             if entries.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color(.systemGray5))
                     .frame(height: 30)
-            } else {
-                // Calculate height per entry to fit within 100pt max
+            } else if entries.count <= 5 {
+                // Show individual bars for up to 5 entries
                 let maxHeight: CGFloat = 100
                 let spacing: CGFloat = 2
-                let entryCount = min(entries.count, 5) // Max 5 entries shown
+                let entryCount = entries.count
                 let totalSpacing = spacing * CGFloat(entryCount - 1)
                 let heightPerEntry = (maxHeight - totalSpacing) / CGFloat(entryCount)
                 
-                ForEach(entries.prefix(5)) { entry in
+                ForEach(entries, id: \.id) { entry in
                     RoundedRectangle(cornerRadius: 4)
                         .fill(entry.type.color)
                         .frame(height: heightPerEntry)
+                }
+            } else {
+                // Show 3 boxes with entry counts for more than 5 entries
+                let groupedEntries = Dictionary(grouping: entries, by: { $0.type })
+                let entryTypes: [EntryType] = [.win, .loss, .ofg]
+                
+                ForEach(entryTypes, id: \.self) { type in
+                    let count = groupedEntries[type]?.count ?? 0
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(type.color)
+                        .frame(height: 30)
+                        .overlay(
+                            Text("\(count)")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                        )
                 }
             }
         }
