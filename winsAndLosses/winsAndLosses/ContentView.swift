@@ -206,6 +206,8 @@ struct ContentView: View {
     @StateObject private var userStore = UserStore()
     @StateObject private var viewModel = JournalViewModel(userID: nil)
     @AppStorage(StoreKeys.appearance) private var appAppearance = "system" // "system" | "light" | "dark"
+    @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
+
     
     @State private var selectedTab = 0
     @State private var showProfilePicker = false
@@ -213,20 +215,24 @@ struct ContentView: View {
     
     var body: some View {
         Group {
-            if userStore.currentUser == nil {
+            // 1) Show onboarding first on first launch
+            if !hasSeenOnboarding {
+                OnboardingView(hasCompletedOnboarding: $hasSeenOnboarding)
+
+            // 2) After onboarding (or if already completed) but not logged in yet → Auth
+            } else if userStore.currentUser == nil {
                 AuthGateView(userStore: userStore) { loggedInUser in
                     userStore.setCurrentUser(loggedInUser.id)
                     viewModel.updateUser(loggedInUser.id)
                 }
+
+            // 3) Logged in → main app tabs
             } else {
                 ZStack {
                     TabView(selection: $selectedTab) {
-                        HomeView(viewModel: viewModel, selectedTab: $selectedTab, userStore: userStore)
-                            .tag(0)
-                        JournalView(viewModel: viewModel)
-                            .tag(1)
-                        AnalyticsView(viewModel: viewModel)
-                            .tag(2)
+                        HomeView(viewModel: viewModel, selectedTab: $selectedTab, userStore: userStore).tag(0)
+                        JournalView(viewModel: viewModel).tag(1)
+                        AnalyticsView(viewModel: viewModel).tag(2)
                         ProfileView(
                             userStore: userStore,
                             onSwitchProfiles: { showProfilePicker = true },
@@ -245,7 +251,6 @@ struct ContentView: View {
                 }
                 .sheet(isPresented: $showLockSheet) {
                     LogoutSheet {
-                        // lock -> back to auth gate
                         userStore.logout()
                         viewModel.updateUser(nil)
                     }
@@ -263,6 +268,506 @@ struct ContentView: View {
         }
     }
 }
+ 
+// =============================================================
+// MARK: - ONBOARDING
+// =============================================================
+struct OnboardingView: View {
+    @Binding var hasCompletedOnboarding: Bool
+    @State private var currentPage = 0
+   
+    var body: some View {
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                colors: [Color(red: 0.68, green: 0.85, blue: 0.90), Color(red: 0.85, green: 0.93, blue: 0.95)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+           
+            TabView(selection: $currentPage) {
+                // Page 1: Welcome Screen
+                WelcomeScreen(onGetStarted: { withAnimation { currentPage = 1 } })
+                    .tag(0)
+               
+                // Page 2: Track Your Journey
+                TrackingScreen()
+                    .tag(1)
+               
+                // Page 3: Review Past Entries
+                ReviewScreen()
+                    .tag(2)
+               
+                // Page 4: View Progress Analytics
+                AnalyticsScreen(onComplete: { hasCompletedOnboarding = true })
+                    .tag(3)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .indexViewStyle(.page(backgroundDisplayMode: .never))
+        }
+    }
+}
+
+// =============================================================
+// MARK: - Page 1: Welcome Screen
+// =============================================================
+
+struct WelcomeScreen: View {
+    let onGetStarted: () -> Void
+    @State private var isAnimating = false
+   
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+           
+            // Penguin Image
+            Image("kobi-logo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 200, height: 200)
+                .scaleEffect(isAnimating ? 1.0 : 0.8)
+                .rotationEffect(.degrees(isAnimating ? 0 : -5))
+                .onAppear {
+                    withAnimation(.spring(response: 0.8, dampingFraction: 0.6).repeatForever(autoreverses: true)) {
+                        isAnimating = true
+                    }
+                }
+           
+            VStack(spacing: 16) {
+                Text("Welcome to")
+                    .font(.title2)
+                    .foregroundColor(.gray)
+               
+                Text("Kobie")
+                    .font(.system(size: 56, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+               
+                Text("Turn goal-tracking into self-reflection")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+           
+            Spacer()
+           
+            Button(action: onGetStarted) {
+                Text("Get Started")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(
+                        LinearGradient(colors: [.cyan, .blue], startPoint: .leading, endPoint: .trailing)
+                    )
+                    .cornerRadius(16)
+                    .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
+            }
+            .padding(.horizontal, 40)
+            .padding(.bottom, 40)
+        }
+    }
+   
+    private func loadPenguinImage() -> UIImage {
+        // Load the penguin image from the bundle
+        if let image = UIImage(named: "penguin") {
+            return image
+        }
+        // Fallback to uploaded image path
+        if let image = UIImage(contentsOfFile: "/mnt/user-data/uploads/1761101464001_image.png") {
+            return image
+        }
+        // Fallback placeholder
+        return UIImage(systemName: "questionmark.circle")!
+    }
+}
+
+// =============================================================
+// MARK: - Page 2: Track Your Journey
+// =============================================================
+
+struct TrackingScreen: View {
+    @State private var showIcons = false
+   
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+           
+            // Title
+            VStack(spacing: 12) {
+                Text("Track Your Journey")
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+               
+                Text("Reflect on your day through three lenses")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+           
+            Spacer()
+           
+            // Three entry types with penguin
+            VStack(spacing: 24) {
+                EntryTypeRow(
+                    icon: "trophy.fill",
+                    title: "Wins",
+                    subtitle: "Things that went well",
+                    color: .green,
+                    delay: 0.0,
+                    showIcons: $showIcons
+                )
+               
+                EntryTypeRow(
+                    icon: "cloud.rain.fill",
+                    title: "Losses",
+                    subtitle: "Things out of your control",
+                    color: .orange,
+                    delay: 0.15,
+                    showIcons: $showIcons
+                )
+               
+                EntryTypeRow(
+                    icon: "light.beacon.max.fill",
+                    title: "Opportunities for Growth",
+                    subtitle: "Ways to improve and learn",
+                    color: .blue,
+                    delay: 0.3,
+                    showIcons: $showIcons
+                )
+            }
+            .padding(.horizontal, 40)
+            .onAppear {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                    showIcons = true
+                }
+            }
+           
+            Spacer()
+           
+            Text("Swipe to continue →")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .padding(.bottom, 40)
+        }
+    }
+}
+
+struct EntryTypeRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let color: Color
+    let delay: Double
+    @Binding var showIcons: Bool
+   
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.white)
+                .frame(width: 50, height: 50)
+                .background(color)
+                .clipShape(Circle())
+                .scaleEffect(showIcons ? 1.0 : 0.1)
+                .animation(.spring(response: 0.6, dampingFraction: 0.6).delay(delay), value: showIcons)
+           
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+               
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+           
+            Spacer()
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+    }
+}
+
+// =============================================================
+// MARK: - Page 3: Review Past Entries
+// =============================================================
+
+struct ReviewScreen: View {
+    @State private var showCards = false
+   
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+           
+            // Title
+            VStack(spacing: 12) {
+                Text("Review & Reflect")
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+               
+                Text("Look back on your journey anytime")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+           
+            Spacer()
+           
+            // Mock journal entries
+            VStack(spacing: 16) {
+                MockJournalCard(
+                    icon: "trophy.fill",
+                    title: "Wins",
+                    content: "Completed my morning workout routine",
+                    color: .green,
+                    delay: 0.0,
+                    showCards: $showCards
+                )
+                
+                MockJournalCard(
+                    icon: "cloud.rain.fill",
+                    title: "Losses",
+                    content: "Unexpected meeting disrupted my schedule",
+                    color: .orange,
+                    delay: 0.3,
+                    showCards: $showCards
+                )
+               
+                MockJournalCard(
+                    icon: "light.beacon.max.fill",
+                    title: "OFGs",
+                    content: "Focus on better time management",
+                    color: .blue,
+                    delay: 0.15,
+                    showCards: $showCards
+                )
+               
+
+            }
+            .padding(.horizontal, 40)
+            .onAppear {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                    showCards = true
+                }
+            }
+           
+            // Description
+            Text("Filter by type, search by date,\nand revisit your growth")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 20)
+           
+            Spacer()
+           
+            Text("Swipe to continue →")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .padding(.bottom, 40)
+        }
+    }
+}
+
+struct MockJournalCard: View {
+    let icon: String
+    let title: String
+    let content: String
+    let color: Color
+    let delay: Double
+    @Binding var showCards: Bool
+   
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundColor(color)
+                .frame(width: 32, height: 32)
+                .background(color.opacity(0.15))
+                .clipShape(Circle())
+           
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(color)
+               
+                Text(content)
+                    .font(.subheadline)
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+               
+                Text("2 hours ago")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+           
+            Spacer()
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        .offset(x: showCards ? 0 : 300)
+        .opacity(showCards ? 1 : 0)
+        .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(delay), value: showCards)
+    }
+}
+
+// =============================================================
+// MARK: - Page 4: Analytics & Complete
+// =============================================================
+
+struct AnalyticsScreen: View {
+    let onComplete: () -> Void
+    @State private var showStats = false
+   
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+           
+            // Title
+            VStack(spacing: 12) {
+                Text("Track Your Progress")
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+               
+                Text("Visualize your growth over time")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+           
+            Spacer()
+           
+            // Mock analytics cards
+            VStack(spacing: 16) {
+                HStack(spacing: 16) {
+                    MockAnalyticCard(
+                        icon: "flame.fill",
+                        value: "7",
+                        label: "Day Streak",
+                        color: .orange,
+                        delay: 0.0,
+                        showStats: $showStats
+                    )
+                   
+                    MockAnalyticCard(
+                        icon: "chart.bar.fill",
+                        value: "42",
+                        label: "Total Entries",
+                        color: .blue,
+                        delay: 0.15,
+                        showStats: $showStats
+                    )
+                }
+               
+                // Weekly breakdown
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("This Week")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                   
+                    HStack(spacing: 8) {
+                        ForEach(["M", "T", "W", "T", "F", "S", "S"], id: \.self) { day in
+                            VStack(spacing: 4) {
+                                Text(day)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                               
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 24, height: 24)
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+                .scaleEffect(showStats ? 1.0 : 0.8)
+                .opacity(showStats ? 1 : 0)
+                .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.3), value: showStats)
+            }
+            .padding(.horizontal, 40)
+            .onAppear {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                    showStats = true
+                }
+            }
+           
+            // Description
+            Text("See your wins, losses, and opportunities\nat a glance with insightful charts")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 20)
+                .padding(.horizontal, 40)
+           
+            Spacer()
+           
+            // Complete button
+            Button(action: onComplete) {
+                Text("Start Your Journey")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(
+                        LinearGradient(colors: [.cyan, .blue], startPoint: .leading, endPoint: .trailing)
+                    )
+                    .cornerRadius(16)
+                    .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
+            }
+            .padding(.horizontal, 40)
+            .padding(.bottom, 40)
+        }
+    }
+}
+
+struct MockAnalyticCard: View {
+    let icon: String
+    let value: String
+    let label: String
+    let color: Color
+    let delay: Double
+    @Binding var showStats: Bool
+   
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(color)
+           
+            Text(value)
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .foregroundColor(.primary)
+           
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        .scaleEffect(showStats ? 1.0 : 0.8)
+        .opacity(showStats ? 1 : 0)
+        .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(delay), value: showStats)
+    }
+}
+
 
 // =============================================================
 // MARK: - Authentication (Onboarding + Login)
