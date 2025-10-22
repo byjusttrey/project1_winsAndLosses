@@ -544,10 +544,12 @@ struct HomeView: View {
         NavigationView {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
+                    Spacer()
                     VStack(alignment: .leading, spacing: 24) {
+                        Spacer()
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Hi there, \(userStore.currentUser?.name ?? "")")
-                                .font(.title2).fontWeight(.semibold)
+                                .font(.title).fontWeight(.bold)
                             Text("How are you feeling today?")
                                 .font(.subheadline).foregroundColor(.gray)
                         }
@@ -564,51 +566,19 @@ struct HomeView: View {
                                 }
                             }
                         }
-                        
+                        Spacer()
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
-                                Text("Your Journey").font(.headline)
+                                Text("Your Journey").font(.title2).fontWeight(.semibold)
                                 Spacer()
                                 Text("\(viewModel.currentStreak()) day streak")
                                     .font(.subheadline).foregroundColor(.gray)
                             }
                             WeekChartView(viewModel: viewModel)
                         }
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Recent Entries").font(.headline)
-                                Spacer()
-                                Button("View all") { selectedTab = 1 }
-                                    .font(.subheadline).foregroundColor(.blue)
-                            }
-                            if viewModel.entries.isEmpty {
-                                Text("No entries yet. Start journaling!")
-                                    .font(.subheadline).foregroundColor(.gray).padding(.vertical)
-                            } else {
-                                ForEach(viewModel.entries.sorted(by: { $0.date > $1.date }).prefix(3)) { entry in
-                                    EntryRow(entry: entry)
-                                }
-                            }
-                        }
-                        .padding(.bottom, 100)
                     }
                     .padding(.horizontal)
                 }
-                
-                Button {
-                newEntryType = .win          // default when tapping +
-                showingNewEntry = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.title2).foregroundColor(.white)
-                        .frame(width: 56, height: 56)
-                        .background(Color.cyan)
-                        .clipShape(Circle())
-                        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-                }
-                .padding(.trailing, 20)
-                .padding(.bottom, 20)
             }
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -676,16 +646,7 @@ struct JournalView: View {
                 }
             }
             .navigationTitle("Journal")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        newEntryType = selectedFilter ?? .win
-                        showingNewEntry = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill").foregroundColor(.cyan)
-                    }
-                }
-            }
+
         }
         .sheet(isPresented: $showingNewEntry) {
             NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry, selectedType: $newEntryType)
@@ -911,6 +872,9 @@ struct StatCard: View {
                 Text("\(count) entries this week").font(.caption).foregroundColor(.gray).padding(.top, 2)
             }
             Spacer()
+            Button(action: action) {
+                Image(systemName: "plus").font(.title3).foregroundColor(.gray)
+            }
         }
         .padding()
         .background(type.color.opacity(0.12))
@@ -926,7 +890,7 @@ struct StatCard: View {
 struct WeekChartView: View {
     @ObservedObject var viewModel: JournalViewModel
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 15) {
             HStack(spacing: 8) {
                 ForEach(0..<7, id: \.self) { offset in
                     let date = Calendar.current.startOfCurrentWeekMonday().adding(days: offset)
