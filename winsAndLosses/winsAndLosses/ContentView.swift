@@ -544,7 +544,9 @@ struct HomeView: View {
         NavigationView {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
+                    Spacer()
                     VStack(alignment: .leading, spacing: 24) {
+                        Spacer()
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Hi there, \(userStore.currentUser?.name ?? "")")
                                 .font(.title2).fontWeight(.semibold)
@@ -574,24 +576,6 @@ struct HomeView: View {
                             }
                             WeekChartView(viewModel: viewModel)
                         }
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Recent Entries").font(.headline)
-                                Spacer()
-                                Button("View all") { selectedTab = 1 }
-                                    .font(.subheadline).foregroundColor(.blue)
-                            }
-                            if viewModel.entries.isEmpty {
-                                Text("No entries yet. Start journaling!")
-                                    .font(.subheadline).foregroundColor(.gray).padding(.vertical)
-                            } else {
-                                ForEach(viewModel.entries.sorted(by: { $0.date > $1.date }).prefix(3)) { entry in
-                                    EntryRow(entry: entry)
-                                }
-                            }
-                        }
-                        .padding(.bottom, 100)
                     }
                     .padding(.horizontal)
                 }
