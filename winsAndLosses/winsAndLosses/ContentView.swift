@@ -204,138 +204,94 @@ final class JournalViewModel: ObservableObject {
     }
 }
 
+private enum StoreKeys {
+    static let profiles = "profiles_v2"
+    static let currentUserID = "current_user_id_v2"
+    static func entriesKey(for userID: UUID) -> String { "journalEntries_\(userID.uuidString)" }
+    static let appearance = "appAppearance" // "system" | "light" | "dark"
+}
 // MARK: - ContentView (Root)
 
 struct ContentView: View {
     @StateObject private var userStore = UserStore()
-    @StateObject private var viewModel = JournalViewModel(userID: nil)
+    @StateObject private var viewModel = JournalViewModel()
+
     @AppStorage(StoreKeys.appearance) private var appAppearance = "system" // "system" | "light" | "dark"
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
-
-    
-    @State private var selectedTab = 0
     @AppStorage("useDarkMode") private var useDarkMode: Bool = false
-    
-    // Auth sheets
+
+    @State private var selectedTab = 0
+
+    // Sheets for switching profiles (reuses your LoginSheet)
     @State private var showAuth = false
-    @State private var pendingLoginProfile: UserProfile? = nil
-    @State private var pinForLogin: String = ""
-    @State private var showPinSheet = false
-    
+
     var body: some View {
         Group {
-            // 1) Show onboarding first on first launch
+            // 1) Onboarding first
             if !hasSeenOnboarding {
                 OnboardingView(hasCompletedOnboarding: $hasSeenOnboarding)
 
-            // 2) After onboarding (or if already completed) but not logged in yet → Auth
+            // 2) Not logged in → Auth
             } else if userStore.currentUser == nil {
                 AuthGateView(userStore: userStore) { loggedInUser in
-                    userStore.setCurrentUser(loggedInUser.id)
-                    viewModel.updateUser(loggedInUser.id)
+                    userStore.currentUser = loggedInUser
+                    viewModel.setProfile(loggedInUser.id)
+                    selectedTab = 0
                 }
 
-            // 3) Logged in → main app tabs
+            // 3) Logged in → main app (use the computed view below)
             } else {
-                ZStack {
-                    TabView(selection: $selectedTab) {
-                        HomeView(viewModel: viewModel, selectedTab: $selectedTab, userStore: userStore).tag(0)
-                        JournalView(viewModel: viewModel).tag(1)
-                        AnalyticsView(viewModel: viewModel).tag(2)
-                        ProfileView(
-                            userStore: userStore,
-                            onSwitchProfiles: { showProfilePicker = true },
-                            onLogout: { showLockSheet = true },
-                            appAppearance: $appAppearance
-                        )
-                        .tag(3)
-                    }
-                    VStack { Spacer(); CustomTabBar(selectedTab: $selectedTab) }
-                }
-                .sheet(isPresented: $showProfilePicker) {
-                    SwitchProfileSheet(userStore: userStore) { newUser in
-                        userStore.setCurrentUser(newUser.id)
-                        viewModel.updateUser(newUser.id)
-                    }
-                }
-                .sheet(isPresented: $showLockSheet) {
-                    LogoutSheet {
-                        userStore.logout()
-                        viewModel.updateUser(nil)
-                    }
-                }
+                mainApp
             }
         }
         .preferredColorScheme(useDarkMode ? .dark : .light)
-        // iOS 14+ version of onChange (single value parameter)
         .onChange(of: userStore.currentUserId) { newId in
+            // keep VM in sync if current user changes elsewhere
             viewModel.setProfile(newId)
         }
     }
     
     private var mainApp: some View {
-        ZStack {
-            TabView(selection: $selectedTab) {
-                HomeView(viewModel: viewModel)
+            ZStack {
+                TabView(selection: $selectedTab) {
+                    HomeView(viewModel: viewModel)
+                        .environmentObject(userStore)
+                        .tag(0)
+
+                    JournalView(viewModel: viewModel)
+                        .tag(1)
+
+                    AnalyticsView(viewModel: viewModel)
+                        .tag(2)
+
+                    ProfileView(
+                        onSwitchAccount: { showAuth = true },
+                        onLogout: {
+                            userStore.logout()
+                            viewModel.setProfile(nil)
+                        },
+                        useDarkMode: $useDarkMode
+                    )
                     .environmentObject(userStore)
-                    .tag(0)
-                
-                JournalView(viewModel: viewModel)
-                    .tag(1)
-                
-                AnalyticsView(viewModel: viewModel)
-                    .tag(2)
-                
-                ProfileView(
-                    onSwitchAccount: { showAuth = true },
-                    onLogout: {
-                        userStore.logout()
-                        viewModel.setProfile(nil)
-                    },
-                    useDarkMode: $useDarkMode
-                )
-                .environmentObject(userStore)
-                .tag(3)
+                    .tag(3)
+                }
+
+                VStack {
+                    Spacer()
+                    CustomTabBar(selectedTab: $selectedTab)
+                }
             }
-            
-            VStack {
-                Spacer()
-                CustomTabBar(selectedTab: $selectedTab)
-            }
-        }
-        .sheet(isPresented: $showAuth) {
-            LoginSheet(
-                userStore: userStore,
-                onAuthed: { profile in
-                    // Successful login → go straight to Home
+            // Switch profile flow uses your existing LoginSheet (handles PIN internally)
+            .sheet(isPresented: $showAuth) {
+                LoginSheet(userStore: userStore) { profile in
+                    userStore.currentUser = profile
                     viewModel.setProfile(profile.id)
                     selectedTab = 0
                     showAuth = false
                 }
-            )
-        }
-        .sheet(isPresented: $showPinSheet) {
-            PinEntrySheet(
-                title: "Enter PIN",
-                pin: $pinForLogin,
-                onCancel: { showPinSheet = false },
-                onConfirm: {
-                    guard let p = pendingLoginProfile else { return }
-                    if pinForLogin == p.pin {
-                        userStore.currentUser = p
-                        viewModel.setProfile(p.id)
-                        selectedTab = 0
-                        pinForLogin = ""
-                        showPinSheet = false
-                    } else {
-                        // simple feedback
-                        pinForLogin = ""
-                    }
-                }
-            )
+            }
         }
     }
-}
  
 // =============================================================
 // MARK: - ONBOARDING
