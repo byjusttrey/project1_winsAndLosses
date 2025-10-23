@@ -318,7 +318,6 @@ struct AuthGateView: View {
                     userStore.addProfile(profile)
                     onAuthed(profile)
                 }
-                .navigationTitle("Create Profile")
             } else {
                 LoginListView(userStore: userStore) { authed in
                     onAuthed(authed)
@@ -326,6 +325,7 @@ struct AuthGateView: View {
                 .navigationTitle("Choose Profile")
             }
         }
+        .padding(.top, 20)
     }
 }
 
@@ -405,7 +405,6 @@ struct LoginListView: View {
                 CreateProfileView { profile in
                     userStore.addProfile(profile)
                 }
-                .navigationTitle("Create Profile")
             ) {
                 Text("Create New Profile")
                     .frame(maxWidth: .infinity)
@@ -421,7 +420,7 @@ struct LoginListView: View {
 }
 
 struct CreateProfileView: View {
-    private let emojis = ["🐧","🦊","🐼","🐨","🦁","🐯","🐸","🦉","🦄","🐵","🐶","🐱","🐥","🐢","🐳","🐙"]
+    private let emojis = ["🐧","🦊","🐼","🐨","🦁","🐯","🐸","🦉","🦄","🐵","🐶","🐱","🐥","🐢","🐳","🐙", "🫎","🐲"]
     
     @State private var name: String = ""
     @State private var emoji: String = "🐧"
