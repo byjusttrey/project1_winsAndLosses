@@ -205,87 +205,64 @@ final class JournalViewModel: ObservableObject {
 }
 
 // MARK: - ContentView (Root)
+enum StoreKeys { static let appearance = "appAppearance" }
 
 struct ContentView: View {
     @StateObject private var userStore = UserStore()
-    @StateObject private var viewModel = JournalViewModel(userID: nil)
+    @StateObject private var viewModel = JournalViewModel()
+    
+    @State private var journalSelectedType: EntryType = .win
+
+
     @AppStorage(StoreKeys.appearance) private var appAppearance = "system" // "system" | "light" | "dark"
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
-
-    
-    @State private var selectedTab = 0
     @AppStorage("useDarkMode") private var useDarkMode: Bool = false
-    
-    // Auth sheets
+
+    @State private var selectedTab = 0
+
+    // Sheets for switching profiles (reuses your LoginSheet)
     @State private var showAuth = false
-    @State private var pendingLoginProfile: UserProfile? = nil
-    @State private var pinForLogin: String = ""
-    @State private var showPinSheet = false
-    
+
     var body: some View {
         Group {
-            // 1) Show onboarding first on first launch
+            // 1) Onboarding first
             if !hasSeenOnboarding {
                 OnboardingView(hasCompletedOnboarding: $hasSeenOnboarding)
 
-            // 2) After onboarding (or if already completed) but not logged in yet → Auth
+            // 2) Not logged in → Auth
             } else if userStore.currentUser == nil {
                 AuthGateView(userStore: userStore) { loggedInUser in
-                    userStore.setCurrentUser(loggedInUser.id)
-                    viewModel.updateUser(loggedInUser.id)
+                    userStore.currentUser = loggedInUser
+                    viewModel.setProfile(loggedInUser.id)
+                    selectedTab = 0
                 }
 
-            // 3) Logged in → main app tabs
+            // 3) Logged in → main app (use the computed view below)
             } else {
-                ZStack {
-                    TabView(selection: $selectedTab) {
-                        HomeView(viewModel: viewModel, selectedTab: $selectedTab, userStore: userStore).tag(0)
-                        JournalView(viewModel: viewModel).tag(1)
-                        AnalyticsView(viewModel: viewModel).tag(2)
-                        ProfileView(
-                            userStore: userStore,
-                            onSwitchProfiles: { showProfilePicker = true },
-                            onLogout: { showLockSheet = true },
-                            appAppearance: $appAppearance
-                        )
-                        .tag(3)
-                    }
-                    VStack { Spacer(); CustomTabBar(selectedTab: $selectedTab) }
-                }
-                .sheet(isPresented: $showProfilePicker) {
-                    SwitchProfileSheet(userStore: userStore) { newUser in
-                        userStore.setCurrentUser(newUser.id)
-                        viewModel.updateUser(newUser.id)
-                    }
-                }
-                .sheet(isPresented: $showLockSheet) {
-                    LogoutSheet {
-                        userStore.logout()
-                        viewModel.updateUser(nil)
-                    }
-                }
+                mainApp
             }
         }
         .preferredColorScheme(useDarkMode ? .dark : .light)
-        // iOS 14+ version of onChange (single value parameter)
         .onChange(of: userStore.currentUserId) { newId in
+            // keep VM in sync if current user changes elsewhere
             viewModel.setProfile(newId)
         }
     }
-    
+
+    // MARK: - Main App (tabs)
     private var mainApp: some View {
         ZStack {
             TabView(selection: $selectedTab) {
                 HomeView(viewModel: viewModel)
                     .environmentObject(userStore)
                     .tag(0)
-                
+
                 JournalView(viewModel: viewModel)
                     .tag(1)
-                
+
                 AnalyticsView(viewModel: viewModel)
                     .tag(2)
-                
+
                 ProfileView(
                     onSwitchAccount: { showAuth = true },
                     onLogout: {
@@ -297,42 +274,20 @@ struct ContentView: View {
                 .environmentObject(userStore)
                 .tag(3)
             }
-            
+
             VStack {
                 Spacer()
                 CustomTabBar(selectedTab: $selectedTab)
             }
         }
+        // Switch profile flow uses your existing LoginSheet (handles PIN internally)
         .sheet(isPresented: $showAuth) {
-            LoginSheet(
-                userStore: userStore,
-                onAuthed: { profile in
-                    // Successful login → go straight to Home
-                    viewModel.setProfile(profile.id)
-                    selectedTab = 0
-                    showAuth = false
-                }
-            )
-        }
-        .sheet(isPresented: $showPinSheet) {
-            PinEntrySheet(
-                title: "Enter PIN",
-                pin: $pinForLogin,
-                onCancel: { showPinSheet = false },
-                onConfirm: {
-                    guard let p = pendingLoginProfile else { return }
-                    if pinForLogin == p.pin {
-                        userStore.currentUser = p
-                        viewModel.setProfile(p.id)
-                        selectedTab = 0
-                        pinForLogin = ""
-                        showPinSheet = false
-                    } else {
-                        // simple feedback
-                        pinForLogin = ""
-                    }
-                }
-            )
+            LoginSheet(userStore: userStore) { profile in
+                userStore.currentUser = profile
+                viewModel.setProfile(profile.id)
+                selectedTab = 0
+                showAuth = false
+            }
         }
     }
 }
@@ -1106,6 +1061,7 @@ struct HomeView: View {
     @ObservedObject var viewModel: JournalViewModel
     @EnvironmentObject var userStore: UserStore
     @State private var showingNewEntry = false
+    @State private var selectedType: EntryType = .win
     
     var body: some View {
         NavigationView {
@@ -1128,7 +1084,10 @@ struct HomeView: View {
                                 StatCard(
                                     type: type,
                                     count: viewModel.entriesThisWeek().filter { $0.type == type }.count,
-                                    action: { showingNewEntry = true }
+                                    action: {
+                                        selectedType = type        // ✅ preselect
+                                        showingNewEntry = true     // open
+                                    }
                                 )
                             }
                         }
@@ -1149,7 +1108,7 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showingNewEntry) {
-            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
+            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry, selectedType: $selectedType)
         }
     }
 }
@@ -1158,6 +1117,8 @@ struct JournalView: View {
     @ObservedObject var viewModel: JournalViewModel
     @State private var selectedFilter: EntryType? = nil
     @State private var showingNewEntry = false
+    @State private var composeType: EntryType = .win   // ← local binding
+
     
     var filteredEntries: [JournalEntry] {
         if let f = selectedFilter { return viewModel.entries.filter { $0.type == f } }
@@ -1189,7 +1150,10 @@ struct JournalView: View {
                         Text("No entries yet").font(.headline)
                         Text("Start journaling your wins, losses, and growth opportunities")
                             .font(.subheadline).foregroundColor(.gray).multilineTextAlignment(.center)
-                        Button(action: { showingNewEntry = true }) {
+                        Button(action: {
+                            composeType = selectedFilter ?? .win        // preselect from filter
+                            showingNewEntry = true
+                        }) {
                             Text("Create Entry")
                                 .font(.headline).foregroundColor(.white)
                                 .padding(.horizontal, 24).padding(.vertical, 12)
@@ -1218,7 +1182,7 @@ struct JournalView: View {
 
         }
         .sheet(isPresented: $showingNewEntry) {
-            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
+            NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry, selectedType: $composeType)
         }
     }
 }
@@ -1326,20 +1290,18 @@ struct ProfileView: View {
 struct NewEntryView: View {
     @ObservedObject var viewModel: JournalViewModel
     @Binding var isPresented: Bool
-    @State private var selectedType: EntryType = .win
+    @Binding var selectedType: EntryType     // ← was @State
+
     @State private var content: String = ""
-    
+
     var body: some View {
         NavigationView {
             VStack(spacing: 24) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("What would you like to journal?")
-                        .font(.headline)
+                    Text("What would you like to journal?").font(.headline)
                     HStack(spacing: 12) {
-                        ForEach(EntryType.allCases) { type in
-                            Button {
-                                selectedType = type
-                            } label: {
+                        ForEach(EntryType.allCases, id: \.self) { type in
+                            Button { selectedType = type } label: {
                                 VStack(spacing: 8) {
                                     Image(systemName: type.icon)
                                         .font(.title2)
@@ -1356,10 +1318,9 @@ struct NewEntryView: View {
                         }
                     }
                 }
-                
+
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(selectedType.subtitle)
-                        .font(.subheadline).foregroundColor(.gray)
+                    Text(selectedType.subtitle).font(.subheadline).foregroundColor(.gray)
                     TextEditor(text: $content)
                         .frame(height: 200)
                         .padding(8)
@@ -1367,14 +1328,15 @@ struct NewEntryView: View {
                         .cornerRadius(12)
                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.systemGray4), lineWidth: 1))
                 }
-                
+
                 Spacer()
-                
+
                 Button {
-                    guard !content.isEmpty else { return }
-                    let entry = JournalEntry(type: selectedType, content: content)
-                    viewModel.addEntry(entry)
-                    isPresented = false
+                    if !content.isEmpty {
+                        let entry = JournalEntry(type: selectedType, content: content)
+                        viewModel.addEntry(entry)
+                        isPresented = false
+                    }
                 } label: {
                     Text("Save Entry")
                         .font(.headline).foregroundColor(.white)
@@ -1388,34 +1350,28 @@ struct NewEntryView: View {
             .navigationTitle("New Entry")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { isPresented = false }
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { isPresented = false } }
             }
         }
     }
 }
 
-// MARK: - UI Building Blocks
-
 struct StatCard: View {
     let type: EntryType
     let count: Int
-    let action: () -> Void
-    
+    var action: () -> Void
+
     var body: some View {
         HStack {
             Image(systemName: type.icon)
-                .font(.title2)
-                .foregroundColor(type.color)
+                .font(.title2).foregroundColor(type.color)
                 .frame(width: 48, height: 48)
-                .background(type.color.opacity(0.15))
+                .background(.white.opacity(0.5))
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text(type.rawValue).font(.headline)
                 Text(type.subtitle).font(.subheadline).foregroundColor(.gray)
-                Text("\(count) entries this week")
-                    .font(.caption).foregroundColor(.gray).padding(.top, 2)
+                Text("\(count) entries this week").font(.caption).foregroundColor(.gray).padding(.top, 2)
             }
             Spacer()
             Button(action: action) {
@@ -1423,8 +1379,13 @@ struct StatCard: View {
             }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(type.color.opacity(0.12))
         .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(type.color.opacity(0.4), lineWidth: 1.5)
+        )
+        .shadow(color: type.color.opacity(0.2), radius: 4, x: 0, y: 2)
     }
 }
 
@@ -1456,15 +1417,39 @@ struct DayBar: View {
     let entries: [JournalEntry]
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(entries.prefix(3)) { entry in
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(entry.type.color)
-                    .frame(height: 36)
-            }
             if entries.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color(.systemGray5))
                     .frame(height: 30)
+            } else if entries.count <= 5 {
+                // Show individual bars for up to 5 entries
+                let maxHeight: CGFloat = 100
+                let spacing: CGFloat = 2
+                let entryCount = entries.count
+                let totalSpacing = spacing * CGFloat(entryCount - 1)
+                let heightPerEntry = (maxHeight - totalSpacing) / CGFloat(entryCount)
+
+                ForEach(entries, id: \.id) { entry in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(entry.type.color)
+                        .frame(height: heightPerEntry)
+                }
+            } else {
+                // Show 3 boxes with entry counts for more than 5 entries
+                let groupedEntries = Dictionary(grouping: entries, by: { $0.type })
+                let entryTypes: [EntryType] = [.win, .loss, .ofg]
+
+                ForEach(entryTypes, id: \.self) { type in
+                    let count = groupedEntries[type]?.count ?? 0
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(type.color)
+                        .frame(height: 30)
+                        .overlay(
+                            Text("\(count)")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                        )
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -1535,7 +1520,7 @@ struct AnalyticCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Image(systemName: icon).font(.title2).foregroundColor(color)
-            Text(value).font(.title).fontWeight(.bold)
+            Text(value).font(.title2).fontWeight(.bold)
             Text(title).font(.caption).foregroundColor(.gray)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
