@@ -224,7 +224,7 @@ struct ContentView: View {
                 AuthGateView(
                     userStore: userStore,
                     onAuthed: { profile in
-                        // set profile into view model and jump to Home
+                        userStore.currentUser = profile        // <-- add this
                         viewModel.setProfile(profile.id)
                         selectedTab = 0
                     }
@@ -310,24 +310,29 @@ struct ContentView: View {
 struct AuthGateView: View {
     @ObservedObject var userStore: UserStore
     var onAuthed: (UserProfile) -> Void
-    
+
     var body: some View {
-        NavigationView {
+        Group {
             if userStore.profiles.isEmpty {
-                CreateProfileView { profile in
-                    userStore.addProfile(profile)
-                    onAuthed(profile)
+                // Only wrap THIS branch in a nav container
+                NavigationView {
+                    CreateProfileView { profile in
+                        userStore.addProfile(profile)
+                        onAuthed(profile)
+                    }
+                    .navigationTitle("Create Profile")
                 }
             } else {
-                LoginListView(userStore: userStore) { authed in
+                // Do NOT wrap LoginSheet in another NavigationView
+                LoginSheet(userStore: userStore) { authed in
                     onAuthed(authed)
                 }
-                .navigationTitle("Choose Profile")
             }
         }
-        .padding(.top, 20)
     }
 }
+
+
 
 struct LoginSheet: View {
     @ObservedObject var userStore: UserStore
@@ -427,6 +432,9 @@ struct CreateProfileView: View {
     @State private var pin1: String = ""
     @State private var pin2: String = ""
     
+    @State private var showConfirm = false
+    @State private var pendingProfile: UserProfile? = nil
+    
     var onCreate: (UserProfile) -> Void
     
     var valid: Bool {
@@ -488,8 +496,14 @@ struct CreateProfileView: View {
                 }
                 
                 Button {
-                    let profile = UserProfile(name: name.trimmingCharacters(in: .whitespaces), emoji: emoji, pin: pin1, prefersDarkMode: false)
-                    onCreate(profile)
+                    pendingProfile = UserProfile(
+                        name: name.trimmingCharacters(in: .whitespaces),
+                        emoji: emoji,
+                        pin: pin1,
+                        prefersDarkMode: false
+                    )
+                    showConfirm = true
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 } label: {
                     Text("Create Profile")
                         .font(.headline)
@@ -500,6 +514,16 @@ struct CreateProfileView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(!valid)
+                .alert("New Account Created", isPresented: $showConfirm, actions: {
+                        Button("OK") {
+                            if let p = pendingProfile {
+                                onCreate(p)        // ➜ triggers addProfile + onAuthed ➜ Home
+                            }
+                        }
+                        Button("Edit", role: .cancel) { /* stay on screen */ }
+                    }, message: {
+                        Text("Welcome, \(pendingProfile?.firstName ?? "there")! Your profile is ready.")
+                    })
                 
                 Spacer(minLength: 20)
             }
