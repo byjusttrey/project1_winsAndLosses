@@ -554,12 +554,12 @@ struct HomeView: View {
         NavigationView {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
+                    Spacer()
                     VStack(alignment: .leading, spacing: 24) {
-                        // Greeting with name
+                        Spacer()
                         VStack(alignment: .leading, spacing: 8) {
-                            let name = userStore.currentUser?.firstName ?? ""
-                            Text(name.isEmpty ? "Hi there," : "Hi there, \(name)")
-                                .font(.title2).fontWeight(.semibold)
+                            Text("Hi there, \(userStore.currentUser?.name ?? "")")
+                                .font(.title).fontWeight(.bold)
                             Text("How are you feeling today?")
                                 .font(.subheadline).foregroundColor(.gray)
                         }
@@ -575,51 +575,19 @@ struct HomeView: View {
                                 )
                             }
                         }
-                        
-                        // Journey + chart
+                        Spacer()
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
-                                Text("Your Journey").font(.headline)
+                                Text("Your Journey").font(.title2).fontWeight(.semibold)
                                 Spacer()
                                 Text("\(viewModel.currentStreak()) day streak")
                                     .font(.subheadline).foregroundColor(.gray)
                             }
                             WeekChartView(viewModel: viewModel)
                         }
-                        
-                        // Recent entries
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Recent Entries").font(.headline)
-                                Spacer()
-                            }
-                            
-                            if viewModel.entries.isEmpty {
-                                Text("No entries yet. Start journaling!")
-                                    .font(.subheadline).foregroundColor(.gray)
-                                    .padding(.vertical)
-                            } else {
-                                ForEach(viewModel.entries.sorted(by: { $0.date > $1.date }).prefix(3)) { entry in
-                                    EntryRow(entry: entry)
-                                }
-                            }
-                        }
-                        .padding(.bottom, 100)
                     }
                     .padding(.horizontal)
                 }
-                
-                // FAB
-                Button(action: { showingNewEntry = true }) {
-                    Image(systemName: "plus")
-                        .font(.title2).foregroundColor(.white)
-                        .frame(width: 56, height: 56)
-                        .background(Color.cyan)
-                        .clipShape(Circle())
-                        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-                }
-                .padding(.trailing, 20)
-                .padding(.bottom, 80)
             }
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -690,13 +658,7 @@ struct JournalView: View {
                 }
             }
             .navigationTitle("Journal")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showingNewEntry = true } label: {
-                        Image(systemName: "plus.circle.fill").foregroundColor(.cyan)
-                    }
-                }
-            }
+
         }
         .sheet(isPresented: $showingNewEntry) {
             NewEntryView(viewModel: viewModel, isPresented: $showingNewEntry)
@@ -912,7 +874,7 @@ struct StatCard: View {
 struct WeekChartView: View {
     @ObservedObject var viewModel: JournalViewModel
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 15) {
             HStack(spacing: 8) {
                 let cal = Calendar.current
                 let start = cal.startOfWeek(for: Date(), startOnMonday: true)
