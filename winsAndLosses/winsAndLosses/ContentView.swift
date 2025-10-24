@@ -366,7 +366,7 @@ struct WelcomeScreen: View {
                     .font(.system(size: 56, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
                
-                Text("Turn goal-tracking into self-reflection")
+                Text("Turn daily happenings into self-reflection")
                     .font(.title3)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
