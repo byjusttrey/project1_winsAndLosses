@@ -208,12 +208,6 @@ final class JournalViewModel: ObservableObject {
     }
 }
 
-private enum StoreKeys {
-    static let profiles = "profiles_v2"
-    static let currentUserID = "current_user_id_v2"
-    static func entriesKey(for userID: UUID) -> String { "journalEntries_\(userID.uuidString)" }
-    static let appearance = "appAppearance" // "system" | "light" | "dark"
-}
 // MARK: - ContentView (Root)
 
 enum StoreKeys { static let appearance = "appAppearance" }
@@ -256,7 +250,6 @@ struct ContentView: View {
             }
         }
         .onChange(of: userStore.currentUserId) { newId in
-            // keep VM in sync if current user changes elsewhere
             viewModel.setProfile(newId)
         }
     }
@@ -264,26 +257,9 @@ struct ContentView: View {
     // MARK: - Main App (tabs)
 
     private var mainApp: some View {
-            ZStack {
-                TabView(selection: $selectedTab) {
-                    HomeView(viewModel: viewModel)
-                        .environmentObject(userStore)
-                        .tag(0)
-
-                    JournalView(viewModel: viewModel)
-                        .tag(1)
-
-                    AnalyticsView(viewModel: viewModel)
-                        .tag(2)
-
-                    ProfileView(
-                        onSwitchAccount: { showAuth = true },
-                        onLogout: {
-                            userStore.logout()
-                            viewModel.setProfile(nil)
-                        },
-                        useDarkMode: $useDarkMode
-                    )
+        ZStack {
+            TabView(selection: $selectedTab) {
+                HomeView(viewModel: viewModel)
                     .environmentObject(userStore)
                     .tag(0)
 
